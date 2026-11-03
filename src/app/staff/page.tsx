@@ -27,6 +27,23 @@ type Technician = {
   is_busy: boolean;
 };
 
+type StaffSession = {
+  token: string;
+  technicianId: string;
+  displayName: string;
+  level: "lead" | "assistant";
+  expiresAt: string;
+};
+
+type LoginRow = {
+  result: "ok" | "invalid_pin" | "locked";
+  session_token: string | null;
+  technician_id: string | null;
+  display_name: string | null;
+  level: "lead" | "assistant" | null;
+  expires_at: string | null;
+};
+
 type StaffAction =
   | "staff_start_service"
   | "staff_finish_service"
@@ -36,10 +53,13 @@ type StaffAction =
 
 type HandOverReason = keyof StaffText["reasons"];
 
+type PageError =
+  | { kind: "wrongPin" | "locked" | "sessionExpired" | "loadFailed" }
+  | { kind: "action"; message: string };
+
 const SALON_SLUG = "demo-salon";
 const REFRESH_SECONDS = 10;
-const PIN_STORAGE_KEY = "nailflow-staff-pin";
-const TECHNICIAN_STORAGE_KEY = "nailflow-staff-technician";
+const SESSION_STORAGE_KEY = "nailflow-staff-session";
 const ANY_TECHNICIAN = "any";
 const HAND_OVER_REASONS: HandOverReason[] = [
   "customer_request",
@@ -47,20 +67,27 @@ const HAND_OVER_REASONS: HandOverReason[] = [
   "other",
 ];
 
-function readSession(key: string) {
+function readSavedSession(): StaffSession | null {
   try {
-    return sessionStorage.getItem(key) ?? "";
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const session = JSON.parse(raw) as StaffSession;
+    if (!session.token || new Date(session.expiresAt).getTime() <= Date.now()) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
+    return session;
   } catch {
-    return "";
+    return null;
   }
 }
 
-function writeSession(key: string, value: string) {
+function saveSession(session: StaffSession | null) {
   try {
-    if (value) sessionStorage.setItem(key, value);
-    else sessionStorage.removeItem(key);
+    if (session) localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    else localStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
-    // Storage can be blocked (e.g. private mode). The page still works without it.
+    // Storage can be blocked. The page still works until it is closed.
   }
 }
 
@@ -290,110 +317,140 @@ export default function StaffPage() {
   const t = STAFF_TEXT[language];
 
   const [isReady, setIsReady] = useState(false);
-  const [pin, setPin] = useState("");
+  const [session, setSession] = useState<StaffSession | null>(null);
   const [pinInput, setPinInput] = useState("");
-  const [technicianId, setTechnicianId] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
-  // Errors are stored as a key or raw message, then shown in the chosen language
-  const [error, setError] = useState<{ kind: "wrongPin" | "loadFailed" | "action"; message?: string } | null>(null);
+  const [error, setError] = useState<PageError | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [handOverEntryId, setHandOverEntryId] = useState<string | null>(null);
   const [changeEntryId, setChangeEntryId] = useState<string | null>(null);
 
-  // Restore PIN and technician after a page refresh
+  // Restore a saved login after a page refresh
   useEffect(() => {
-    setPin(readSession(PIN_STORAGE_KEY));
-    setTechnicianId(readSession(TECHNICIAN_STORAGE_KEY));
+    setSession(readSavedSession());
     setIsReady(true);
   }, []);
 
-  const logOut = useCallback(() => {
-    setPin("");
-    setTechnicianId("");
+  const clearSession = useCallback(() => {
+    setSession(null);
+    saveSession(null);
     setQueue([]);
     setTechnicians([]);
     setHasLoaded(false);
-    writeSession(PIN_STORAGE_KEY, "");
-    writeSession(TECHNICIAN_STORAGE_KEY, "");
+    setHandOverEntryId(null);
+    setChangeEntryId(null);
   }, []);
 
-  // Loads the queue and technicians. Returns false if the PIN is wrong or the network failed.
+  async function logOut() {
+    if (session) {
+      await supabase.rpc("staff_logout", { p_session_token: session.token });
+    }
+    clearSession();
+    setError(null);
+  }
+
+  // Loads the queue and technicians for the logged-in technician
   const loadAll = useCallback(
-    async (pinToUse: string) => {
+    async (token: string) => {
       const [queueResult, techResult] = await Promise.all([
-        supabase.rpc("staff_get_queue", { p_salon_slug: SALON_SLUG, p_pin: pinToUse }),
-        supabase.rpc("staff_get_technicians", { p_salon_slug: SALON_SLUG, p_pin: pinToUse }),
+        supabase.rpc("staff_get_queue", { p_session_token: token }),
+        supabase.rpc("staff_get_technicians", { p_session_token: token }),
       ]);
 
       const loadError = queueResult.error ?? techResult.error;
       if (loadError) {
-        if (loadError.message.includes("Invalid salon or PIN")) {
-          logOut();
-          setError({ kind: "wrongPin" });
+        if (loadError.message.includes("Session expired")) {
+          // Locked, PIN changed, or past midnight
+          clearSession();
+          setError({ kind: "sessionExpired" });
         } else {
           setError({ kind: "loadFailed" });
         }
-        return false;
+        return;
       }
 
       setQueue((queueResult.data ?? []) as QueueRow[]);
       setTechnicians((techResult.data ?? []) as Technician[]);
       setHasLoaded(true);
       setError((prev) => (prev?.kind === "action" ? prev : null));
-      return true;
     },
-    [logOut]
+    [clearSession]
   );
 
   // Keep everything up to date while logged in:
   // 1) instant updates when the queue changes, 2) reload when the screen wakes up,
   // 3) a regular refresh as a backup if the connection drops
+  const token = session?.token ?? "";
   useEffect(() => {
-    if (!pin) return;
+    if (!token) return;
 
-    loadAll(pin);
+    loadAll(token);
 
     const channel = supabase
       .channel(`queue:${SALON_SLUG}`)
       .on("broadcast", { event: "queue_changed" }, () => {
-        loadAll(pin);
+        loadAll(token);
       })
       .subscribe();
 
     function handleVisibilityChange() {
       if (document.visibilityState === "visible") {
-        loadAll(pin);
+        loadAll(token);
       }
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    const timer = setInterval(() => loadAll(pin), REFRESH_SECONDS * 1000);
+    const timer = setInterval(() => loadAll(token), REFRESH_SECONDS * 1000);
 
     return () => {
       supabase.removeChannel(channel);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearInterval(timer);
     };
-  }, [pin, loadAll]);
+  }, [token, loadAll]);
 
   async function handlePinSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const value = pinInput.trim();
-    if (!value) return;
-    const ok = await loadAll(value);
-    if (ok) {
-      setPin(value);
-      writeSession(PIN_STORAGE_KEY, value);
-      setPinInput("");
-      setError(null);
-    }
-  }
+    const pin = pinInput.trim();
+    if (!pin || isLoggingIn) return;
 
-  function chooseTechnician(id: string) {
-    setTechnicianId(id);
-    writeSession(TECHNICIAN_STORAGE_KEY, id);
+    setIsLoggingIn(true);
+    setError(null);
+
+    const { data, error: loginError } = await supabase.rpc("staff_login", {
+      p_salon_slug: SALON_SLUG,
+      p_pin: pin,
+    });
+
+    setIsLoggingIn(false);
+    setPinInput("");
+
+    const row = (data as LoginRow[] | null)?.[0];
+    if (loginError || !row) {
+      setError({ kind: "loadFailed" });
+      return;
+    }
+    if (row.result === "locked") {
+      setError({ kind: "locked" });
+      return;
+    }
+    if (row.result !== "ok" || !row.session_token || !row.technician_id) {
+      setError({ kind: "wrongPin" });
+      return;
+    }
+
+    const newSession: StaffSession = {
+      token: row.session_token,
+      technicianId: row.technician_id,
+      displayName: row.display_name ?? "",
+      level: row.level ?? "assistant",
+      expiresAt: row.expires_at ?? new Date().toISOString(),
+    };
+    setSession(newSession);
+    saveSession(newSession);
   }
 
   async function runAction(
@@ -401,24 +458,30 @@ export default function StaffPage() {
     action: StaffAction,
     extraParams: Record<string, string | null> = {}
   ) {
+    if (!session) return;
     setBusyEntryId(entryId);
     setError(null);
 
     const { error: actionError } = await supabase.rpc(action, {
-      p_salon_slug: SALON_SLUG,
-      p_pin: pin,
+      p_session_token: session.token,
       p_entry_id: entryId,
       ...extraParams,
     });
 
     if (actionError) {
+      if (actionError.message.includes("Session expired")) {
+        clearSession();
+        setError({ kind: "sessionExpired" });
+        setBusyEntryId(null);
+        return;
+      }
       setError({ kind: "action", message: actionError.message });
     } else {
       setHandOverEntryId(null);
       setChangeEntryId(null);
     }
 
-    await loadAll(pin);
+    await loadAll(session.token);
     setBusyEntryId(null);
   }
 
@@ -438,11 +501,9 @@ export default function StaffPage() {
 
   const errorText = !error
     ? ""
-    : error.kind === "wrongPin"
-      ? t.wrongPin
-      : error.kind === "loadFailed"
-        ? t.loadFailed
-        : translateStaffError(error.message ?? "", t);
+    : error.kind === "action"
+      ? translateStaffError(error.message, t)
+      : t[error.kind];
 
   const toggle = <LanguageToggle language={language} onChange={setLanguage} />;
 
@@ -456,8 +517,8 @@ export default function StaffPage() {
     );
   }
 
-  // Screen 1: enter PIN
-  if (!pin) {
+  // Screen 1: enter personal PIN
+  if (!session) {
     return (
       <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-6">
         <div className="mb-4 flex w-full max-w-sm justify-end">{toggle}</div>
@@ -466,20 +527,21 @@ export default function StaffPage() {
           className="w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-md"
         >
           <h1 className="text-2xl font-bold text-pink-600">{t.staffTitle}</h1>
-          <p className="mt-1 text-gray-600">{t.enterPin}</p>
+          <p className="mt-1 text-gray-600">{t.enterYourPin}</p>
           <input
             type="password"
             inputMode="numeric"
             autoComplete="off"
             value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
+            onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ""))}
             maxLength={6}
             className="mt-6 w-full rounded-lg border border-gray-300 px-4 py-4 text-center text-3xl tracking-widest text-gray-900 focus:border-pink-500 focus:outline-none"
           />
           {errorText && <p className="mt-3 text-sm text-red-700">{errorText}</p>}
           <button
             type="submit"
-            className="mt-6 w-full rounded-full bg-pink-600 py-4 text-lg font-semibold text-white hover:bg-pink-700"
+            disabled={isLoggingIn || pinInput.length !== 6}
+            className="mt-6 w-full rounded-full bg-pink-600 py-4 text-lg font-semibold text-white hover:bg-pink-700 disabled:opacity-50"
           >
             {t.continue}
           </button>
@@ -496,46 +558,21 @@ export default function StaffPage() {
     );
   }
 
-  const me = technicians.find((tech) => tech.technician_id === technicianId);
+  // Screen 2: the technician's queue
+  const meId = session.technicianId;
+  const myLevel = technicians.find((tech) => tech.technician_id === meId)?.level ?? session.level;
 
-  // Screen 2: choose who you are
-  if (!me) {
-    return (
-      <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-6">
-        <div className="mb-4 flex w-full max-w-sm justify-end">{toggle}</div>
-        <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-md">
-          <h1 className="text-2xl font-bold text-gray-900">{t.whoAreYou}</h1>
-          <div className="mt-6 grid grid-cols-2 gap-3">
-            {technicians.map((tech) => (
-              <button
-                key={tech.technician_id}
-                onClick={() => chooseTechnician(tech.technician_id)}
-                className="rounded-xl border-2 border-pink-200 py-6 text-xl font-semibold text-gray-900 hover:border-pink-500 hover:bg-pink-50"
-              >
-                {tech.display_name}
-              </button>
-            ))}
-          </div>
-          <button onClick={logOut} className="mt-6 text-sm text-gray-500 underline">
-            {t.logOut}
-          </button>
-        </div>
-      </main>
-    );
-  }
-
-  // Screen 3: the technician's queue
   const canServe = (row: QueueRow) =>
-    (!row.needs_lead || me.level === "lead") &&
-    (!row.requested_technician_id || row.requested_technician_id === me.technician_id);
+    (!row.needs_lead || myLevel === "lead") &&
+    (!row.requested_technician_id || row.requested_technician_id === meId);
 
   const myCurrent = queue.find(
-    (row) => row.status === "in_service" && row.assigned_technician_id === me.technician_id
+    (row) => row.status === "in_service" && row.assigned_technician_id === meId
   );
   const waiting = queue.filter((row) => row.status === "waiting");
   const suggested = myCurrent ? undefined : waiting.find(canServe);
   const othersInService = queue.filter(
-    (row) => row.status === "in_service" && row.assigned_technician_id !== me.technician_id
+    (row) => row.status === "in_service" && row.assigned_technician_id !== meId
   );
   const freeTechnicians = technicians.filter((tech) => !tech.is_busy);
 
@@ -545,13 +582,13 @@ export default function StaffPage() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm text-gray-500">{t.loggedInAs}</p>
-            <p className="text-xl font-bold text-gray-900">{me.display_name}</p>
+            <p className="text-xl font-bold text-gray-900">{session.displayName}</p>
           </div>
           <div className="flex flex-col items-end gap-2">
             {toggle}
             <div className="flex gap-3 text-sm">
-              <button onClick={() => chooseTechnician("")} className="text-pink-700 underline">
-                {t.switchTechnician}
+              <button onClick={logOut} className="text-pink-700 underline">
+                {t.switchPerson}
               </button>
               <button onClick={logOut} className="text-gray-500 underline">
                 {t.logOut}
@@ -577,7 +614,7 @@ export default function StaffPage() {
                     row={myCurrent}
                     t={t}
                     freeTechnicians={eligibleFor(myCurrent).filter(
-                      (tech) => !tech.is_busy && tech.technician_id !== me.technician_id
+                      (tech) => !tech.is_busy && tech.technician_id !== meId
                     )}
                     isBusy={busyEntryId === myCurrent.entry_id}
                     onConfirm={(toId, reason, note) =>
@@ -616,11 +653,7 @@ export default function StaffPage() {
               <CustomerCard row={suggested} t={t} technicianName={technicianName} highlight>
                 <button
                   disabled={busyEntryId === suggested.entry_id}
-                  onClick={() =>
-                    runAction(suggested.entry_id, "staff_start_service", {
-                      p_technician_id: me.technician_id,
-                    })
-                  }
+                  onClick={() => runAction(suggested.entry_id, "staff_start_service")}
                   className="w-full rounded-full bg-pink-600 py-5 text-2xl font-bold text-white hover:bg-pink-700 disabled:opacity-60"
                 >
                   ▶ {t.startBig}
@@ -661,11 +694,7 @@ export default function StaffPage() {
                     {!myCurrent && canServe(row) && row.entry_id !== suggested?.entry_id && (
                       <button
                         disabled={busyEntryId === row.entry_id}
-                        onClick={() =>
-                          runAction(row.entry_id, "staff_start_service", {
-                            p_technician_id: me.technician_id,
-                          })
-                        }
+                        onClick={() => runAction(row.entry_id, "staff_start_service")}
                         className="flex-1 rounded-full border-2 border-pink-600 py-3 font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-60"
                       >
                         {t.start}
@@ -710,7 +739,7 @@ export default function StaffPage() {
               </div>
             ))}
             {freeTechnicians
-              .filter((tech) => tech.technician_id !== me.technician_id)
+              .filter((tech) => tech.technician_id !== meId)
               .map((tech) => (
                 <div
                   key={tech.technician_id}

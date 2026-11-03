@@ -2,16 +2,17 @@ import type { Language } from "./i18n";
 
 const en = {
   staffTitle: "Staff",
-  enterPin: "Enter the salon PIN",
+  enterYourPin: "Enter your PIN",
   continue: "Continue",
   wrongPin: "Wrong PIN. Please try again.",
+  locked: "Too many wrong PINs. Please wait 15 minutes and try again.",
+  sessionExpired: "You have been signed out. Please enter your PIN again.",
   loadFailed: "Could not load the queue. Retrying...",
   loading: "Loading...",
   loadingQueue: "Loading queue...",
-  whoAreYou: "Who are you?",
   logOut: "Log out",
   loggedInAs: "Logged in as",
-  switchTechnician: "Switch technician",
+  switchPerson: "Switch person",
 
   currentCustomer: "Your current customer",
   nextCustomer: "Your next customer",
@@ -24,7 +25,8 @@ const en = {
   nobodyWaiting: "Nobody is waiting.",
   changeTechnician: "Change technician",
   noShow: "No-show",
-  confirmNoShow: (ticket: number, name: string) => `Mark #${ticket} ${name} as no-show?`,
+  confirmNoShow: (ticket: number, name: string) =>
+    `Mark #${ticket} ${name} as no-show? Your name will be recorded.`,
   otherTechnicians: "Other technicians",
   free: "Free",
   liveUpdates: "Updates automatically",
@@ -65,22 +67,25 @@ const en = {
     "This customer is not being served": "This customer is not being served.",
     "Please choose a different technician": "Please choose a different technician.",
     "This technician is busy with another customer": "This technician is busy with another customer.",
+    "You can only finish your own customer": "You can only finish your own customer.",
+    "You can only hand over your own customer": "You can only hand over your own customer.",
   } as Record<string, string>,
   actionFailed: "Something went wrong. Please try again.",
 };
 
 const vi: typeof en = {
   staffTitle: "Nhân viên",
-  enterPin: "Nhập mã PIN của tiệm",
+  enterYourPin: "Nhập mã PIN của bạn",
   continue: "Tiếp tục",
   wrongPin: "Sai mã PIN. Vui lòng thử lại.",
+  locked: "Nhập sai quá nhiều lần. Vui lòng chờ 15 phút rồi thử lại.",
+  sessionExpired: "Bạn đã bị đăng xuất. Vui lòng nhập lại mã PIN.",
   loadFailed: "Không tải được hàng chờ. Đang thử lại...",
   loading: "Đang tải...",
   loadingQueue: "Đang tải hàng chờ...",
-  whoAreYou: "Bạn là ai?",
   logOut: "Đăng xuất",
   loggedInAs: "Đang đăng nhập",
-  switchTechnician: "Đổi người",
+  switchPerson: "Đổi người",
 
   currentCustomer: "Khách bạn đang làm",
   nextCustomer: "Khách tiếp theo của bạn",
@@ -94,7 +99,7 @@ const vi: typeof en = {
   changeTechnician: "Đổi thợ",
   noShow: "Khách bỏ về",
   confirmNoShow: (ticket: number, name: string) =>
-    `Xác nhận khách #${ticket} ${name} đã bỏ về?`,
+    `Xác nhận khách #${ticket} ${name} đã bỏ về? Tên của bạn sẽ được ghi lại.`,
   otherTechnicians: "Các thợ khác",
   free: "Đang rảnh",
   liveUpdates: "Tự động cập nhật",
@@ -108,8 +113,8 @@ const vi: typeof en = {
   any: "Bất kỳ",
   unknown: "Không rõ",
 
-  handOverTitle: (ticket: number, name: string) => `Chuyển khách #${ticket} ${name}`,
-  noFreeTechnician: "Hiện không có thợ nào khác đang rảnh để làm dịch vụ này.",
+   handOverTitle: (ticket: number, name: string) => `Chuyển khách #${ticket} ${name}`,
+     noFreeTechnician: "Hiện không có thợ nào khác đang rảnh để làm dịch vụ này.",
   toTechnician: "Chuyển cho thợ",
   choose: "Chọn...",
   reason: "Lý do",
@@ -135,6 +140,8 @@ const vi: typeof en = {
     "This customer is not being served": "Khách này hiện không có ai đang làm.",
     "Please choose a different technician": "Vui lòng chọn thợ khác.",
     "This technician is busy with another customer": "Thợ này đang bận làm khách khác.",
+    "You can only finish your own customer": "Bạn chỉ bấm XONG được cho khách của mình.",
+    "You can only hand over your own customer": "Bạn chỉ chuyển được khách của mình.",
   },
   actionFailed: "Có lỗi xảy ra, vui lòng thử lại.",
 };
