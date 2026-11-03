@@ -1,0 +1,98 @@
+import type { Language } from "./i18n";
+
+const en = {
+  loading: "Loading...",
+  loadFailed: "Could not load services. Please try again.",
+  addTitle: "Add a service",
+  name: "Service name",
+  price: "Price (£)",
+  startingPrice: "Starting price (£)",
+  duration: "Time (minutes)",
+  whoCanDo: "Who can do this service?",
+  bothLevels: "Lead and assistant",
+  leadOnly: "Lead only",
+  priceIsFrom: "Price varies",
+  priceIsFromHint: "Shown as \"from\". The technician confirms the final price.",
+  group: "Group (optional)",
+  groupHint: "Services in the same group are shown together, e.g. Nail art",
+  save: "Save",
+  saving: "Saving...",
+  add: "Add service",
+  adding: "Adding...",
+  added: (name: string) => `${name} has been added.`,
+  cancel: "Cancel",
+  edit: "Edit",
+  hide: "Hide",
+  show: "Show",
+  hidden: "Hidden from customers",
+  moveUp: "Move up",
+  moveDown: "Move down",
+  leadBadge: "Lead only",
+  bothBadge: "Lead & assistant",
+  fromPrice: (price: string) => `from ${price}`,
+  minutes: (n: number) => `${n} min`,
+  groupBadge: (name: string) => `Group: ${name}`,
+  priceNote: "Changing a price does not affect customers who already have a number.",
+  empty: "No services yet.",
+  errors: {
+    "Service name is required": "Please enter a service name.",
+    "Invalid price": "Please enter a price between £0 and £1,000.",
+    "Invalid duration": "Please enter a time between 5 and 480 minutes.",
+    "Group name is too long": "The group name is too long (40 characters at most).",
+    "Not allowed": "You do not have permission to do this.",
+  } as Record<string, string>,
+  actionFailed: "Something went wrong. Please try again.",
+};
+
+const vi: typeof en = {
+  loading: "Đang tải...",
+  loadFailed: "Không tải được dịch vụ. Vui lòng thử lại.",
+  addTitle: "Thêm dịch vụ",
+  name: "Tên dịch vụ",
+  price: "Giá (£)",
+  startingPrice: "Giá khởi điểm (£)",
+  duration: "Thời gian làm (phút)",
+  whoCanDo: "Ai làm được dịch vụ này?",
+  bothLevels: "Thợ chính và thợ phụ",
+  leadOnly: "Chỉ thợ chính",
+  priceIsFrom: "Giá thay đổi",
+  priceIsFromHint: "Hiện chữ \"from\". Thợ chốt giá thật sau khi làm.",
+  group: "Nhóm (không bắt buộc)",
+  groupHint: "Dịch vụ cùng nhóm hiện chung một chỗ, ví dụ Nail art",
+  save: "Lưu",
+  saving: "Đang lưu...",
+  add: "Thêm dịch vụ",
+  adding: "Đang thêm...",
+  added: (name: string) => `Đã thêm ${name}.`,
+  cancel: "Huỷ",
+  edit: "Sửa",
+  hide: "Ẩn",
+  show: "Hiện",
+  hidden: "Đang ẩn với khách",
+  moveUp: "Lên",
+  moveDown: "Xuống",
+  leadBadge: "Chỉ thợ chính",
+  bothBadge: "Thợ chính & phụ",
+  fromPrice: (price: string) => `từ ${price}`,
+  minutes: (n: number) => `${n} phút`,
+  groupBadge: (name: string) => `Nhóm: ${name}`,
+  priceNote: "Sửa giá không ảnh hưởng khách đã lấy số.",
+  empty: "Chưa có dịch vụ nào.",
+  errors: {
+    "Service name is required": "Vui lòng nhập tên dịch vụ.",
+    "Invalid price": "Vui lòng nhập giá từ £0 đến £1,000.",
+    "Invalid duration": "Vui lòng nhập thời gian từ 5 đến 480 phút.",
+    "Group name is too long": "Tên nhóm quá dài (tối đa 40 ký tự).",
+    "Not allowed": "Bạn không có quyền làm việc này.",
+  },
+  actionFailed: "Có lỗi xảy ra, vui lòng thử lại.",
+};
+
+export type ServicesText = typeof en;
+
+export const SERVICES_TEXT: Record<Language, ServicesText> = { en, vi };
+
+export function translateServicesError(message: string, t: ServicesText) {
+  const key = Object.keys(t.errors).find((k) => message.includes(k));
+  return key ? t.errors[key] : t.actionFailed;
+}

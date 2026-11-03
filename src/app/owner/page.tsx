@@ -8,6 +8,7 @@ import { OWNER_TEXT } from "@/lib/owner-text";
 import { LanguageToggle } from "@/components/language-toggle";
 import { TechniciansSection } from "./technicians-section";
 import { TodaySection } from "./today-section";
+import { ServicesSection } from "./services-section";
 
 type MySalon = {
   salon_id: string;
@@ -21,9 +22,16 @@ type SectionKey = "today" | "technicians" | "services" | "reports";
 const SECTIONS: { key: SectionKey; icon: string; ready: boolean }[] = [
   { key: "today", icon: "📋", ready: true },
   { key: "technicians", icon: "👩‍🔧", ready: true },
-  { key: "services", icon: "💅", ready: false },
+  { key: "services", icon: "💅", ready: true },
   { key: "reports", icon: "📈", ready: false },
 ];
+
+const SECTION_ICONS: Record<SectionKey, string> = {
+  today: "📋",
+  technicians: "👩‍🔧",
+  services: "💅",
+  reports: "📈",
+};
 
 const SELECTED_SALON_KEY = "nailflow-owner-salon";
 
@@ -238,8 +246,7 @@ export default function OwnerPage() {
   const salon = salons.find((s) => s.salon_id === selectedSalonId) ?? salons[0];
 
   // Screen 3: an open section
-  if (openSection === "technicians" || openSection === "today") {
-    const icon = openSection === "today" ? "📋" : "👩‍🔧";
+  if (openSection && openSection !== "reports") {
     return (
       <main className="min-h-screen bg-gray-50 px-4 py-6">
         <div className="mx-auto max-w-2xl">
@@ -251,23 +258,27 @@ export default function OwnerPage() {
             {t.back}
           </button>
           <h1 className="mt-2 text-2xl font-bold text-gray-900">
-            {icon} {t.sections[openSection].title} · {salon.salon_name}
+            {SECTION_ICONS[openSection]} {t.sections[openSection].title} · {salon.salon_name}
           </h1>
           <div className="mt-4">
-            {openSection === "today" ? (
+            {openSection === "today" && (
               <TodaySection
                 key={salon.salon_id}
                 salonId={salon.salon_id}
                 salonSlug={salon.salon_slug}
                 language={language}
               />
-            ) : (
+            )}
+            {openSection === "technicians" && (
               <TechniciansSection
                 key={salon.salon_id}
                 salonId={salon.salon_id}
                 role={salon.role}
                 t={t}
               />
+            )}
+            {openSection === "services" && (
+              <ServicesSection key={salon.salon_id} salonId={salon.salon_id} language={language} />
             )}
           </div>
         </div>
