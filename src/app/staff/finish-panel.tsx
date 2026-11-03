@@ -12,10 +12,41 @@ type EntryService = {
   price_is_from: boolean;
 };
 
+type EntryLoyalty = {
+  is_member: boolean;
+  customer_name: string | null;
+  stamps_enabled: boolean;
+  stamps: number;
+  stamps_required: number;
+  stamp_reward_pence: number;
+  points_enabled: boolean;
+  points: number;
+  points_redeem_threshold: number;
+  points_reward_pence: number;
+  discount_limit_percent: number;
+  discount_limit_pence: number;
+};
+
 type ExtraReason = "long_nails" | "complex_design" | "repair" | "other";
+type DiscountReason =
+  | "regular"
+  | "friends_family"
+  | "promotion"
+  | "compensation"
+  | "birthday"
+  | "other";
 type PaymentMethod = "cash" | "card" | "split";
+type RewardType = "stamps" | "points";
 
 const EXTRA_REASONS: ExtraReason[] = ["long_nails", "complex_design", "repair", "other"];
+const DISCOUNT_REASONS: DiscountReason[] = [
+  "regular",
+  "friends_family",
+  "promotion",
+  "compensation",
+  "birthday",
+  "other",
+];
 
 function formatPrice(pence: number) {
   return `£${(pence / 100).toFixed(2)}`;
@@ -26,6 +57,14 @@ function parsePounds(text: string): number | null {
   const value = text.trim();
   if (!/^\d+(\.\d{1,2})?$/.test(value)) return null;
   return Math.round(parseFloat(value) * 100);
+}
+
+// "10" -> 10. Whole numbers from 0 to 100 only.
+function parsePercent(text: string): number | null {
+  const value = text.trim();
+  if (!/^\d{1,3}$/.test(value)) return null;
+  const n = parseInt(value, 10);
+  return n <= 100 ? n : null;
 }
 
 const inputClass =
@@ -47,6 +86,7 @@ export function FinishPanel({
   const t = FINISH_TEXT[language];
 
   const [services, setServices] = useState<EntryService[]>([]);
+  const [loyalty, setLoyalty] = useState<EntryLoyalty | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -54,28 +94,43 @@ export function FinishPanel({
   const [extraText, setExtraText] = useState("");
   const [extraReason, setExtraReason] = useState<ExtraReason | "">("");
   const [extraNote, setExtraNote] = useState("");
+
+  const [discountMode, setDiscountMode] = useState<"pounds" | "percent">("pounds");
+  const [discountText, setDiscountText] = useState("");
+  const [discountReason, setDiscountReason] = useState<DiscountReason | "">("");
+
+  const [rewardType, setRewardType] = useState<RewardType | null>(null);
+
   const [payment, setPayment] = useState<PaymentMethod>("cash");
   const [cashText, setCashText] = useState("");
 
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Load the services of this ticket
+  // Load the services and loyalty card of this ticket
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      const { data, error: loadError } = await supabase.rpc("staff_get_entry_services", {
-        p_session_token: sessionToken,
-        p_entry_id: entryId,
-      });
+      const [servicesResult, loyaltyResult] = await Promise.all([
+        supabase.rpc("staff_get_entry_services", {
+          p_session_token: sessionToken,
+          p_entry_id: entryId,
+        }),
+        supabase.rpc("staff_get_entry_loyalty", {
+          p_session_token: sessionToken,
+          p_entry_id: entryId,
+        }),
+      ]);
       if (cancelled) return;
       setIsLoading(false);
-      if (loadError) {
+
+      if (servicesResult.error) {
         setLoadFailed(true);
         return;
       }
-      const list = (data ?? []) as EntryService[];
+
+      const list = (servicesResult.data ?? []) as EntryService[];
       setServices(list);
 
       // Start "from" prices at their starting price
@@ -84,6 +139,19 @@ export function FinishPanel({
         if (s.price_is_from) initial[s.service_id] = (s.price_pence / 100).toFixed(2);
       }
       setFromPrices(initial);
+
+      if (!loyaltyResult.error) {
+        const row = ((loyaltyResult.data ?? []) as EntryLoyalty[])[0] ?? null;
+        setLoyalty(row);
+        // Use the reward automatically when the customer has one
+        if (row?.is_member) {
+          if (row.stamps_enabled && row.stamps >= row.stamps_required) {
+            setRewardType("stamps");
+          } else if (row.points_enabled && row.points >= row.points_redeem_threshold) {
+            setRewardType("points");
+          }
+        }
+      }
     }
 
     load();
@@ -92,26 +160,76 @@ export function FinishPanel({
     };
   }, [sessionToken, entryId]);
 
-  // Work out every price and the total
+  // ----- Work out every amount -----
+
   const servicePrices = services.map((s) =>
     s.price_is_from ? parsePounds(fromPrices[s.service_id] ?? "") : s.price_pence
   );
   const extraPence = extraText.trim() ? parsePounds(extraText) : 0;
-  const allPricesValid =
+  const pricesValid =
     servicePrices.every((p) => p !== null) &&
     services.every((s, i) => !s.price_is_from || (servicePrices[i] ?? 0) >= s.price_pence) &&
     extraPence !== null;
-  const totalPence = allPricesValid
+  const subtotal = pricesValid
     ? (servicePrices as number[]).reduce((sum, p) => sum + p, 0) + (extraPence as number)
     : null;
 
+  // Discount
+  let discountPence: number | null = 0;
+  if (discountText.trim() && subtotal !== null) {
+    if (discountMode === "pounds") {
+      discountPence = parsePounds(discountText);
+    } else {
+      const percent = parsePercent(discountText);
+      discountPence = percent === null ? null : Math.round((subtotal * percent) / 100);
+    }
+  }
+  const discountLimit =
+    loyalty && subtotal !== null
+      ? Math.max(
+          loyalty.discount_limit_pence,
+          Math.floor((subtotal * loyalty.discount_limit_percent) / 100)
+        )
+      : 0;
+  const discountTooHigh =
+    discountPence !== null &&
+    discountPence > 0 &&
+    (discountPence > discountLimit || (subtotal !== null && discountPence > subtotal));
+  const needsDiscountReason = (discountPence ?? 0) > 0 && !discountReason;
+
+  // Reward
+  const hasStampReward =
+    !!loyalty?.is_member && loyalty.stamps_enabled && loyalty.stamps >= loyalty.stamps_required;
+  const hasPointsReward =
+    !!loyalty?.is_member &&
+    loyalty.points_enabled &&
+    loyalty.points >= loyalty.points_redeem_threshold;
+  const rewardFullPence =
+    rewardType === "stamps"
+      ? loyalty?.stamp_reward_pence ?? 0
+      : rewardType === "points"
+        ? loyalty?.points_reward_pence ?? 0
+        : 0;
+  const afterDiscount =
+    subtotal !== null && discountPence !== null ? Math.max(subtotal - discountPence, 0) : null;
+  const rewardPence = afterDiscount === null ? 0 : Math.min(rewardFullPence, afterDiscount);
+
+  const totalPence =
+    afterDiscount !== null && !discountTooHigh ? afterDiscount - rewardPence : null;
+
+  // Payment
   const splitCashPence = parsePounds(cashText);
   const splitValid =
     payment !== "split" ||
     (splitCashPence !== null && totalPence !== null && splitCashPence <= totalPence);
 
-  const needsReason = (extraPence ?? 0) > 0 && !extraReason;
-  const canConfirm = totalPence !== null && splitValid && !needsReason && !isSaving;
+  const needsExtraReason = (extraPence ?? 0) > 0 && !extraReason;
+  const canConfirm =
+    totalPence !== null &&
+    splitValid &&
+    !needsExtraReason &&
+    !needsDiscountReason &&
+    !isSaving;
 
   async function handleConfirm() {
     if (totalPence === null || !canConfirm) return;
@@ -130,6 +248,8 @@ export function FinishPanel({
       if (s.price_is_from) pricesForFromServices[s.service_id] = servicePrices[i] as number;
     });
 
+    const finalDiscount = discountPence ?? 0;
+
     setIsSaving(true);
     setError("");
 
@@ -142,6 +262,9 @@ export function FinishPanel({
       p_extra_charge_note: (extraPence ?? 0) > 0 ? extraNote.trim() || null : null,
       p_cash_pence: cashPence,
       p_card_pence: cardPence,
+      p_discount_pence: finalDiscount,
+      p_discount_reason: finalDiscount > 0 ? discountReason : null,
+      p_reward_type: rewardType,
     });
 
     setIsSaving(false);
@@ -151,6 +274,8 @@ export function FinishPanel({
     }
     onFinished();
   }
+
+  // ----- Screens -----
 
   if (isLoading) {
     return <p className="rounded-xl bg-gray-50 p-4 text-gray-600">{t.loading}</p>;
@@ -170,6 +295,67 @@ export function FinishPanel({
   return (
     <div className="rounded-xl border-2 border-green-500 bg-green-50 p-4">
       <p className="text-lg font-bold text-gray-900">💷 {t.title}</p>
+
+      {/* Loyalty card */}
+      {loyalty && (loyalty.stamps_enabled || loyalty.points_enabled) && (
+        <div className="mt-3 rounded-lg bg-purple-50 p-3">
+          <p className="text-sm font-semibold text-purple-800">💜 {t.loyaltyTitle}</p>
+          {!loyalty.is_member ? (
+            <p className="mt-1 text-sm text-gray-600">{t.notMember}</p>
+          ) : (
+            <>
+              <p className="mt-1 text-sm text-purple-900">
+                {loyalty.stamps_enabled && t.stampsStatus(loyalty.stamps, loyalty.stamps_required)}
+                {loyalty.stamps_enabled && loyalty.points_enabled && " · "}
+                {loyalty.points_enabled && t.pointsStatus(loyalty.points)}
+              </p>
+
+              {(hasStampReward || hasPointsReward) && (
+                <div className="mt-2">
+                  <p className="font-semibold text-purple-900">{t.hasReward}</p>
+                  {rewardType ? (
+                    <div className="mt-2 flex items-center gap-3">
+                      <span className="font-medium text-green-700">{t.rewardApplied}</span>
+                      <button
+                        type="button"
+                        onClick={() => setRewardType(null)}
+                        className="text-sm text-gray-600 underline"
+                      >
+                        {t.removeReward}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {hasStampReward && (
+                        <button
+                          type="button"
+                          onClick={() => setRewardType("stamps")}
+                          className="rounded-full bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+                        >
+                          🎁 {t.useStampReward(formatPrice(loyalty.stamp_reward_pence))}
+                        </button>
+                      )}
+                      {hasPointsReward && (
+                        <button
+                          type="button"
+                          onClick={() => setRewardType("points")}
+                          className="rounded-full bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+                        >
+                          ⭐{" "}
+                          {t.usePointsReward(
+                            loyalty.points_redeem_threshold,
+                            formatPrice(loyalty.points_reward_pence)
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Services */}
       <div className="mt-3 space-y-3">
@@ -223,7 +409,7 @@ export function FinishPanel({
             <select
               value={extraReason}
               onChange={(e) => setExtraReason(e.target.value as ExtraReason)}
-              className={`${inputClass} ${needsReason ? "border-red-400" : ""}`}
+              className={`${inputClass} ${needsExtraReason ? "border-red-400" : ""}`}
             >
               <option value="">{t.chooseReason}</option>
               {EXTRA_REASONS.map((r) => (
@@ -244,10 +430,83 @@ export function FinishPanel({
         )}
       </div>
 
-      {/* Total */}
-      <div className="mt-3 flex justify-between rounded-lg bg-white p-3 text-xl font-bold text-gray-900">
-        <span>{t.total}</span>
-        <span>{totalPence === null ? "—" : formatPrice(totalPence)}</span>
+      {/* Discount */}
+      <div className="mt-3 rounded-lg bg-white p-3">
+        <label className="block text-sm text-gray-700">{t.discount}</label>
+        <div className="mt-1 flex gap-2">
+          <div className="flex overflow-hidden rounded-lg border border-gray-300">
+            {(["pounds", "percent"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setDiscountMode(mode)}
+                className={`px-4 py-3 font-semibold ${
+                  discountMode === mode ? "bg-pink-600 text-white" : "bg-white text-gray-700"
+                }`}
+              >
+                {mode === "pounds" ? "£" : "%"}
+              </button>
+            ))}
+          </div>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={discountText}
+            onChange={(e) => setDiscountText(e.target.value)}
+            placeholder="0"
+            className={`w-full rounded-lg border bg-white px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none ${
+              discountPence === null || discountTooHigh ? "border-red-400" : "border-gray-300"
+            }`}
+          />
+        </div>
+
+        {loyalty && subtotal !== null && (
+          <p className={`mt-2 text-xs ${discountTooHigh ? "text-red-700" : "text-gray-500"}`}>
+            {discountTooHigh ? t.discountTooHigh : t.discountLimit(formatPrice(discountLimit))}
+          </p>
+        )}
+
+        {(discountPence ?? 0) > 0 && (
+          <>
+            <label className="mt-3 block text-sm text-gray-700">{t.discountReason}</label>
+            <select
+              value={discountReason}
+              onChange={(e) => setDiscountReason(e.target.value as DiscountReason)}
+              className={`${inputClass} ${needsDiscountReason ? "border-red-400" : ""}`}
+            >
+              <option value="">{t.chooseReason}</option>
+              {DISCOUNT_REASONS.map((r) => (
+                <option key={r} value={r}>
+                  {t.discountReasons[r]}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+      </div>
+
+      {/* Totals */}
+      <div className="mt-3 space-y-1 rounded-lg bg-white p-3">
+        <div className="flex justify-between text-gray-700">
+          <span>{t.subtotal}</span>
+          <span>{subtotal === null ? "—" : formatPrice(subtotal)}</span>
+        </div>
+        {(discountPence ?? 0) > 0 && (
+          <div className="flex justify-between text-green-700">
+            <span>{t.discountLine}</span>
+            <span>–{formatPrice(discountPence ?? 0)}</span>
+          </div>
+        )}
+        {rewardPence > 0 && (
+          <div className="flex justify-between text-purple-700">
+            <span>{t.rewardLine}</span>
+            <span>–{formatPrice(rewardPence)}</span>
+          </div>
+        )}
+        <div className="flex justify-between border-t border-gray-200 pt-2 text-xl font-bold text-gray-900">
+          <span>{t.total}</span>
+          <span>{totalPence === null ? "—" : formatPrice(totalPence)}</span>
+        </div>
       </div>
 
       {/* Payment */}

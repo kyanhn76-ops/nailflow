@@ -33,9 +33,31 @@ type DisplayItem =
   | { kind: "service"; service: Service }
   | { kind: "group"; name: string; services: Service[] };
 
+type SavedCustomer = { firstName: string; phone: string; loyaltyOptIn: boolean };
+
 // Which salon this page belongs to. Later each salon gets its own QR link.
 const SALON_SLUG = "demo-salon";
 const ANY_TECHNICIAN = "any";
+const SAVED_CUSTOMER_KEY = `nailflow-customer-${SALON_SLUG}`;
+
+// The customer's details are saved on their own phone only
+function readSavedCustomer(): SavedCustomer | null {
+  try {
+    const raw = localStorage.getItem(SAVED_CUSTOMER_KEY);
+    return raw ? (JSON.parse(raw) as SavedCustomer) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedCustomer(customer: SavedCustomer | null) {
+  try {
+    if (customer) localStorage.setItem(SAVED_CUSTOMER_KEY, JSON.stringify(customer));
+    else localStorage.removeItem(SAVED_CUSTOMER_KEY);
+  } catch {
+    // Storage can be blocked. The form still works.
+  }
+}
 
 function formatPrice(pence: number) {
   return `£${(pence / 100).toFixed(2)}`;
@@ -132,9 +154,28 @@ export default function JoinQueuePage() {
   const [openGroups, setOpenGroups] = useState<string[]>([]);
   const [technicianId, setTechnicianId] = useState(ANY_TECHNICIAN);
   const [notes, setNotes] = useState("");
-    const [loyaltyOptIn, setLoyaltyOptIn] = useState(false);
+  const [loyaltyOptIn, setLoyaltyOptIn] = useState(false);
+  const [isReturning, setIsReturning] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Fill in the customer's details from their last visit
+  useEffect(() => {
+    const saved = readSavedCustomer();
+    if (!saved) return;
+    setFirstName(saved.firstName);
+    setPhone(saved.phone);
+    setLoyaltyOptIn(saved.loyaltyOptIn);
+    setIsReturning(true);
+  }, []);
+
+  function forgetMe() {
+    writeSavedCustomer(null);
+    setFirstName("");
+    setPhone("");
+    setLoyaltyOptIn(false);
+    setIsReturning(false);
+  }
 
   // Load the salon and its services when the page opens
   useEffect(() => {
@@ -237,7 +278,7 @@ export default function JoinQueuePage() {
       setError("Please choose at least one service.");
       return;
     }
-       if (loyaltyOptIn && !phone.trim()) {
+    if (loyaltyOptIn && !phone.trim()) {
       setError("Please enter your mobile number to collect loyalty stamps.");
       return;
     }
@@ -245,6 +286,7 @@ export default function JoinQueuePage() {
       setError("Please enter a valid UK mobile number, e.g. 07123 456789.");
       return;
     }
+
     setIsSubmitting(true);
 
     const { data, error: joinError } = await supabase.rpc("join_queue", {
@@ -255,7 +297,7 @@ export default function JoinQueuePage() {
       p_notes: notes.trim() || null,
       p_requested_technician_id:
         effectiveTechnicianId === ANY_TECHNICIAN ? null : effectiveTechnicianId,
-              p_loyalty_opt_in: loyaltyOptIn && phone.trim() !== "",
+      p_loyalty_opt_in: loyaltyOptIn && phone.trim() !== "",
     });
 
     if (joinError || !data || data.length === 0) {
@@ -263,6 +305,9 @@ export default function JoinQueuePage() {
       setIsSubmitting(false);
       return;
     }
+
+    // Remember the customer on this phone for next time
+    writeSavedCustomer({ firstName: firstName.trim(), phone: phone.trim(), loyaltyOptIn });
 
     const entryId = (data as { entry_id: string; ticket_number: number }[])[0].entry_id;
     router.push(`/ticket/${entryId}`);
@@ -294,7 +339,22 @@ export default function JoinQueuePage() {
       >
         <p className="text-sm text-gray-500">{salonName}</p>
         <h1 className="mt-1 text-2xl font-bold text-pink-600">Join the queue</h1>
-        <p className="mt-1 text-gray-600">Tell us your name and what you would like.</p>
+        <p className="mt-1 text-gray-600">
+          {isReturning
+            ? "Just choose your services and get your number."
+            : "Tell us your name and what you would like."}
+        </p>
+
+        {isReturning && (
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-pink-50 px-4 py-3 text-sm">
+            <span className="text-gray-800">
+              👋 Welcome back, <b>{firstName}</b>!
+            </span>
+            <button type="button" onClick={forgetMe} className="text-pink-700 underline">
+              Not you?
+            </button>
+          </div>
+        )}
 
         <label className="mt-6 block text-sm font-medium text-gray-700">First name</label>
         <input
@@ -406,7 +466,7 @@ export default function JoinQueuePage() {
           placeholder="07123 456789"
           className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
         />
-               <p className="mt-1 text-xs text-gray-500">
+        <p className="mt-1 text-xs text-gray-500">
           Only used to tell you when your turn is near.
         </p>
 
