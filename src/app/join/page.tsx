@@ -132,6 +132,7 @@ export default function JoinQueuePage() {
   const [openGroups, setOpenGroups] = useState<string[]>([]);
   const [technicianId, setTechnicianId] = useState(ANY_TECHNICIAN);
   const [notes, setNotes] = useState("");
+    const [loyaltyOptIn, setLoyaltyOptIn] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -236,11 +237,14 @@ export default function JoinQueuePage() {
       setError("Please choose at least one service.");
       return;
     }
+       if (loyaltyOptIn && !phone.trim()) {
+      setError("Please enter your mobile number to collect loyalty stamps.");
+      return;
+    }
     if (phone.trim() && !isValidUkMobile(phone)) {
       setError("Please enter a valid UK mobile number, e.g. 07123 456789.");
       return;
     }
-
     setIsSubmitting(true);
 
     const { data, error: joinError } = await supabase.rpc("join_queue", {
@@ -251,6 +255,7 @@ export default function JoinQueuePage() {
       p_notes: notes.trim() || null,
       p_requested_technician_id:
         effectiveTechnicianId === ANY_TECHNICIAN ? null : effectiveTechnicianId,
+              p_loyalty_opt_in: loyaltyOptIn && phone.trim() !== "",
     });
 
     if (joinError || !data || data.length === 0) {
@@ -401,9 +406,26 @@ export default function JoinQueuePage() {
           placeholder="07123 456789"
           className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
         />
-        <p className="mt-1 text-xs text-gray-500">
+               <p className="mt-1 text-xs text-gray-500">
           Only used to tell you when your turn is near.
         </p>
+
+        <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-lg bg-purple-50 p-3">
+          <input
+            type="checkbox"
+            checked={loyaltyOptIn}
+            onChange={(e) => setLoyaltyOptIn(e.target.checked)}
+            className="mt-1 h-5 w-5 accent-purple-600"
+          />
+          <span className="text-sm text-gray-800">
+            <span className="font-semibold">💜 Would you like to collect loyalty stamps?</span>
+            <br />
+            <span className="text-xs text-gray-600">
+              Get rewards when you come back. We will save your first name and mobile number for
+              your loyalty card. You can ask the salon to delete them at any time.
+            </span>
+          </span>
+        </label>
 
         <label className="mt-6 block text-sm font-medium text-gray-700">Notes (optional)</label>
         <textarea

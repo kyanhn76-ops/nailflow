@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { Receipt } from "./receipt";
+import { LoyaltyCard } from "./loyalty-card";
 
 type QueueStatus = {
   ticket_number: number;
@@ -211,13 +212,38 @@ export default function TicketPage() {
     setIsLoading(false);
   }, [entryId]);
 
-  // Load the ticket now, then refresh it every few seconds
+  // Instant updates: listen for queue changes in this salon,
+  // reload when the phone wakes up, and refresh regularly as a backup
   useEffect(() => {
-    loadTicket();
-    const timer = setInterval(loadTicket, REFRESH_SECONDS * 1000);
-    return () => clearInterval(timer);
-  }, [loadTicket]);
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
 
+    loadTicket();
+
+    supabase.rpc("get_ticket_salon_slug", { p_entry_id: entryId }).then(({ data }) => {
+      if (cancelled || !data) return;
+      channel = supabase
+        .channel(`queue:${data as string}`)
+        .on("broadcast", { event: "queue_changed" }, () => {
+          loadTicket();
+        })
+        .subscribe();
+    });
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") loadTicket();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const timer = setInterval(loadTicket, REFRESH_SECONDS * 1000);
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearInterval(timer);
+    };
+  }, [entryId, loadTicket]);
   if (isLoading) {
     return (
       <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6">
@@ -248,6 +274,7 @@ export default function TicketPage() {
 
         <StatusMessage ticket={ticket} />
                 {ticket.status === "done" && <Receipt entryId={entryId} />}
+                        <LoyaltyCard key={ticket.status} entryId={entryId} />
 
         {ticket.status === "waiting" && (
           <div className="mt-4">
