@@ -9,6 +9,7 @@ import { LanguageToggle } from "@/components/language-toggle";
 import { TechniciansSection } from "./technicians-section";
 import { TodaySection } from "./today-section";
 import { ServicesSection } from "./services-section";
+import { ReportsSection } from "./reports-section";
 
 type MySalon = {
   salon_id: string;
@@ -23,7 +24,7 @@ const SECTIONS: { key: SectionKey; icon: string; ready: boolean }[] = [
   { key: "today", icon: "📋", ready: true },
   { key: "technicians", icon: "👩‍🔧", ready: true },
   { key: "services", icon: "💅", ready: true },
-  { key: "reports", icon: "📈", ready: false },
+  { key: "reports", icon: "📈", ready: true },
 ];
 
 const SECTION_ICONS: Record<SectionKey, string> = {
@@ -246,8 +247,8 @@ export default function OwnerPage() {
   const salon = salons.find((s) => s.salon_id === selectedSalonId) ?? salons[0];
 
   // Screen 3: an open section
-  if (openSection && openSection !== "reports") {
-    return (
+    if (openSection) {
+        return (
       <main className="min-h-screen bg-gray-50 px-4 py-6">
         <div className="mx-auto max-w-2xl">
           {header}
@@ -279,6 +280,14 @@ export default function OwnerPage() {
             )}
             {openSection === "services" && (
               <ServicesSection key={salon.salon_id} salonId={salon.salon_id} language={language} />
+            )}
+                        {openSection === "reports" && (
+              <ReportsSection
+                key={salon.salon_id}
+                salonId={salon.salon_id}
+                role={salon.role}
+                language={language}
+              />
             )}
           </div>
         </div>
