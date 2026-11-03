@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useLanguage, type Language } from "@/lib/i18n";
+import { STAFF_TEXT, translateStaffError, type StaffText } from "@/lib/staff-text";
 
 type QueueRow = {
   entry_id: string;
@@ -32,16 +34,17 @@ type StaffAction =
   | "staff_change_requested_technician"
   | "staff_hand_over";
 
+type HandOverReason = keyof StaffText["reasons"];
+
 const SALON_SLUG = "demo-salon";
 const REFRESH_SECONDS = 10;
 const PIN_STORAGE_KEY = "nailflow-staff-pin";
 const TECHNICIAN_STORAGE_KEY = "nailflow-staff-technician";
 const ANY_TECHNICIAN = "any";
-
-const HAND_OVER_REASONS = [
-  { value: "customer_request", label: "Customer asked to change" },
-  { value: "technician_unavailable", label: "I need to leave / take a break" },
-  { value: "other", label: "Other reason" },
+const HAND_OVER_REASONS: HandOverReason[] = [
+  "customer_request",
+  "technician_unavailable",
+  "other",
 ];
 
 function readSession(key: string) {
@@ -65,13 +68,39 @@ function minutesSince(iso: string) {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
 }
 
+function LanguageToggle({
+  language,
+  onChange,
+}: {
+  language: Language;
+  onChange: (language: Language) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-full border border-gray-300 text-sm">
+      {(["vi", "en"] as Language[]).map((lang) => (
+        <button
+          key={lang}
+          onClick={() => onChange(lang)}
+          className={`px-3 py-1 ${
+            language === lang ? "bg-pink-600 text-white" : "bg-white text-gray-700"
+          }`}
+        >
+          {lang === "vi" ? "🇻🇳 VI" : "🇬🇧 EN"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function CustomerCard({
   row,
+  t,
   technicianName,
   highlight,
   children,
 }: {
   row: QueueRow;
+  t: StaffText;
   technicianName: (id: string | null) => string;
   highlight?: boolean;
   children?: React.ReactNode;
@@ -89,25 +118,25 @@ function CustomerCard({
         </div>
         <div className="text-right text-sm text-gray-500">
           {row.status === "waiting" ? (
-            <p>Waiting {minutesSince(row.created_at)} min</p>
+            <p>⏱ {t.waitingMinutes(minutesSince(row.created_at))}</p>
           ) : (
-            row.started_at && <p>Started {minutesSince(row.started_at)} min ago</p>
+            row.started_at && <p>⏱ {t.startedMinutesAgo(minutesSince(row.started_at))}</p>
           )}
-          <p>About {row.total_duration_minutes} min</p>
+          <p>{t.aboutMinutes(row.total_duration_minutes)}</p>
         </div>
       </div>
 
-      <p className="mt-3 text-gray-800">{row.service_names ?? "No services"}</p>
+      <p className="mt-3 text-gray-800">💅 {row.service_names ?? t.noServices}</p>
 
       {row.status === "waiting" && row.requested_technician_id && (
         <p className="mt-2 text-sm font-medium text-pink-700">
-          Asked for {technicianName(row.requested_technician_id)}
+          👤 {t.askedFor(technicianName(row.requested_technician_id))}
         </p>
       )}
 
       {row.notes && (
         <p className="mt-3 rounded-lg bg-yellow-100 px-3 py-2 text-sm text-yellow-900">
-          Note: {row.notes}
+          📝 {t.note}: {row.notes}
         </p>
       )}
 
@@ -118,59 +147,61 @@ function CustomerCard({
 
 function HandOverPanel({
   row,
+  t,
   freeTechnicians,
   isBusy,
   onConfirm,
   onCancel,
 }: {
   row: QueueRow;
+  t: StaffText;
   freeTechnicians: Technician[];
   isBusy: boolean;
-  onConfirm: (toTechnicianId: string, reason: string, note: string) => void;
+  onConfirm: (toTechnicianId: string, reason: HandOverReason, note: string) => void;
   onCancel: () => void;
 }) {
   const [toTechnicianId, setToTechnicianId] = useState("");
-  const [reason, setReason] = useState(HAND_OVER_REASONS[0].value);
+  const [reason, setReason] = useState<HandOverReason>(HAND_OVER_REASONS[0]);
   const [note, setNote] = useState("");
 
   return (
     <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-      <p className="font-semibold text-gray-900">Hand over #{row.ticket_number} {row.first_name}</p>
+      <p className="font-semibold text-gray-900">
+        {t.handOverTitle(row.ticket_number, row.first_name)}
+      </p>
 
       {freeTechnicians.length === 0 ? (
-        <p className="mt-3 text-sm text-gray-600">
-          No other technician is free for these services right now.
-        </p>
+        <p className="mt-3 text-sm text-gray-600">{t.noFreeTechnician}</p>
       ) : (
         <>
-          <label className="mt-3 block text-sm font-medium text-gray-700">To technician</label>
+          <label className="mt-3 block text-sm font-medium text-gray-700">{t.toTechnician}</label>
           <select
             value={toTechnicianId}
             onChange={(e) => setToTechnicianId(e.target.value)}
             className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900"
           >
-            <option value="">Choose...</option>
-            {freeTechnicians.map((t) => (
-              <option key={t.technician_id} value={t.technician_id}>
-                {t.display_name}
+            <option value="">{t.choose}</option>
+            {freeTechnicians.map((tech) => (
+              <option key={tech.technician_id} value={tech.technician_id}>
+                {tech.display_name}
               </option>
             ))}
           </select>
 
-          <label className="mt-3 block text-sm font-medium text-gray-700">Reason</label>
+          <label className="mt-3 block text-sm font-medium text-gray-700">{t.reason}</label>
           <select
             value={reason}
-            onChange={(e) => setReason(e.target.value)}
+            onChange={(e) => setReason(e.target.value as HandOverReason)}
             className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900"
           >
             {HAND_OVER_REASONS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
+              <option key={r} value={r}>
+                {t.reasons[r]}
               </option>
             ))}
           </select>
 
-          <label className="mt-3 block text-sm font-medium text-gray-700">Note (optional)</label>
+          <label className="mt-3 block text-sm font-medium text-gray-700">{t.noteOptional}</label>
           <input
             type="text"
             value={note}
@@ -188,14 +219,14 @@ function HandOverPanel({
             onClick={() => onConfirm(toTechnicianId, reason, note)}
             className="flex-1 rounded-full bg-pink-600 py-3 font-semibold text-white hover:bg-pink-700 disabled:opacity-50"
           >
-            Confirm hand over
+            {t.confirmHandOver}
           </button>
         )}
         <button
           onClick={onCancel}
           className="flex-1 rounded-full border border-gray-300 bg-white py-3 text-gray-700 hover:bg-gray-100"
         >
-          Cancel
+          {t.cancel}
         </button>
       </div>
     </div>
@@ -204,12 +235,14 @@ function HandOverPanel({
 
 function ChangeRequestPanel({
   row,
+  t,
   eligibleTechnicians,
   isBusy,
   onConfirm,
   onCancel,
 }: {
   row: QueueRow;
+  t: StaffText;
   eligibleTechnicians: Technician[];
   isBusy: boolean;
   onConfirm: (technicianId: string | null) => void;
@@ -219,33 +252,33 @@ function ChangeRequestPanel({
 
   return (
     <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-      <label className="block text-sm font-medium text-gray-700">Customer wants</label>
+      <label className="block text-sm font-medium text-gray-700">{t.customerWants}</label>
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value)}
         className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900"
       >
-        <option value={ANY_TECHNICIAN}>First available</option>
-        {eligibleTechnicians.map((t) => (
-          <option key={t.technician_id} value={t.technician_id}>
-            {t.display_name}
+        <option value={ANY_TECHNICIAN}>{t.firstAvailable}</option>
+        {eligibleTechnicians.map((tech) => (
+          <option key={tech.technician_id} value={tech.technician_id}>
+            {tech.display_name}
           </option>
         ))}
       </select>
-      <p className="mt-2 text-xs text-gray-500">The customer keeps their place in the queue.</p>
+      <p className="mt-2 text-xs text-gray-500">{t.keepsPlace}</p>
       <div className="mt-4 flex gap-3">
         <button
           disabled={isBusy}
           onClick={() => onConfirm(selected === ANY_TECHNICIAN ? null : selected)}
           className="flex-1 rounded-full bg-pink-600 py-3 font-semibold text-white hover:bg-pink-700 disabled:opacity-50"
         >
-          Save
+          {t.save}
         </button>
         <button
           onClick={onCancel}
           className="flex-1 rounded-full border border-gray-300 bg-white py-3 text-gray-700 hover:bg-gray-100"
         >
-          Cancel
+          {t.cancel}
         </button>
       </div>
     </div>
@@ -253,6 +286,9 @@ function ChangeRequestPanel({
 }
 
 export default function StaffPage() {
+  const { language, setLanguage } = useLanguage("vi");
+  const t = STAFF_TEXT[language];
+
   const [isReady, setIsReady] = useState(false);
   const [pin, setPin] = useState("");
   const [pinInput, setPinInput] = useState("");
@@ -260,7 +296,8 @@ export default function StaffPage() {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
-  const [error, setError] = useState("");
+  // Errors are stored as a key or raw message, then shown in the chosen language
+  const [error, setError] = useState<{ kind: "wrongPin" | "loadFailed" | "action"; message?: string } | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [handOverEntryId, setHandOverEntryId] = useState<string | null>(null);
   const [changeEntryId, setChangeEntryId] = useState<string | null>(null);
@@ -294,9 +331,9 @@ export default function StaffPage() {
       if (loadError) {
         if (loadError.message.includes("Invalid salon or PIN")) {
           logOut();
-          setError("Wrong PIN. Please try again.");
+          setError({ kind: "wrongPin" });
         } else {
-          setError("Could not load the queue. Retrying...");
+          setError({ kind: "loadFailed" });
         }
         return false;
       }
@@ -304,13 +341,13 @@ export default function StaffPage() {
       setQueue((queueResult.data ?? []) as QueueRow[]);
       setTechnicians((techResult.data ?? []) as Technician[]);
       setHasLoaded(true);
-      setError("");
+      setError((prev) => (prev?.kind === "action" ? prev : null));
       return true;
     },
     [logOut]
   );
 
-    // Keep everything up to date while logged in:
+  // Keep everything up to date while logged in:
   // 1) instant updates when the queue changes, 2) reload when the screen wakes up,
   // 3) a regular refresh as a backup if the connection drops
   useEffect(() => {
@@ -340,6 +377,7 @@ export default function StaffPage() {
       clearInterval(timer);
     };
   }, [pin, loadAll]);
+
   async function handlePinSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = pinInput.trim();
@@ -349,6 +387,7 @@ export default function StaffPage() {
       setPin(value);
       writeSession(PIN_STORAGE_KEY, value);
       setPinInput("");
+      setError(null);
     }
   }
 
@@ -363,7 +402,7 @@ export default function StaffPage() {
     extraParams: Record<string, string | null> = {}
   ) {
     setBusyEntryId(entryId);
-    setError("");
+    setError(null);
 
     const { error: actionError } = await supabase.rpc(action, {
       p_salon_slug: SALON_SLUG,
@@ -373,7 +412,7 @@ export default function StaffPage() {
     });
 
     if (actionError) {
-      setError(actionError.message);
+      setError({ kind: "action", message: actionError.message });
     } else {
       setHandOverEntryId(null);
       setChangeEntryId(null);
@@ -384,25 +423,35 @@ export default function StaffPage() {
   }
 
   function handleNoShow(row: QueueRow) {
-    if (window.confirm(`Mark #${row.ticket_number} ${row.first_name} as no-show?`)) {
+    if (window.confirm(t.confirmNoShow(row.ticket_number, row.first_name))) {
       runAction(row.entry_id, "staff_cancel_entry");
     }
   }
 
   const technicianName = (id: string | null) => {
-    if (!id) return "Any";
-    return technicians.find((t) => t.technician_id === id)?.display_name ?? "Unknown";
+    if (!id) return t.any;
+    return technicians.find((tech) => tech.technician_id === id)?.display_name ?? t.unknown;
   };
 
   const eligibleFor = (row: QueueRow) =>
-    technicians.filter((t) => !row.needs_lead || t.level === "lead");
+    technicians.filter((tech) => !row.needs_lead || tech.level === "lead");
+
+  const errorText = !error
+    ? ""
+    : error.kind === "wrongPin"
+      ? t.wrongPin
+      : error.kind === "loadFailed"
+        ? t.loadFailed
+        : translateStaffError(error.message ?? "", t);
+
+  const toggle = <LanguageToggle language={language} onChange={setLanguage} />;
 
   // ----- Screens -----
 
   if (!isReady) {
     return (
       <main className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">Loading...</p>
+        <p className="text-gray-600">{t.loading}</p>
       </main>
     );
   }
@@ -410,13 +459,14 @@ export default function StaffPage() {
   // Screen 1: enter PIN
   if (!pin) {
     return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center px-6">
+      <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-6">
+        <div className="mb-4 flex w-full max-w-sm justify-end">{toggle}</div>
         <form
           onSubmit={handlePinSubmit}
           className="w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-md"
         >
-          <h1 className="text-2xl font-bold text-pink-600">Staff</h1>
-          <p className="mt-1 text-gray-600">Enter the salon PIN</p>
+          <h1 className="text-2xl font-bold text-pink-600">{t.staffTitle}</h1>
+          <p className="mt-1 text-gray-600">{t.enterPin}</p>
           <input
             type="password"
             inputMode="numeric"
@@ -426,12 +476,12 @@ export default function StaffPage() {
             maxLength={6}
             className="mt-6 w-full rounded-lg border border-gray-300 px-4 py-4 text-center text-3xl tracking-widest text-gray-900 focus:border-pink-500 focus:outline-none"
           />
-          {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
+          {errorText && <p className="mt-3 text-sm text-red-700">{errorText}</p>}
           <button
             type="submit"
             className="mt-6 w-full rounded-full bg-pink-600 py-4 text-lg font-semibold text-white hover:bg-pink-700"
           >
-            Continue
+            {t.continue}
           </button>
         </form>
       </main>
@@ -441,32 +491,33 @@ export default function StaffPage() {
   if (!hasLoaded) {
     return (
       <main className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">Loading queue...</p>
+        <p className="text-gray-600">{t.loadingQueue}</p>
       </main>
     );
   }
 
-  const me = technicians.find((t) => t.technician_id === technicianId);
+  const me = technicians.find((tech) => tech.technician_id === technicianId);
 
   // Screen 2: choose who you are
   if (!me) {
     return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center px-6">
+      <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-6">
+        <div className="mb-4 flex w-full max-w-sm justify-end">{toggle}</div>
         <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-md">
-          <h1 className="text-2xl font-bold text-gray-900">Who are you?</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t.whoAreYou}</h1>
           <div className="mt-6 grid grid-cols-2 gap-3">
-            {technicians.map((t) => (
+            {technicians.map((tech) => (
               <button
-                key={t.technician_id}
-                onClick={() => chooseTechnician(t.technician_id)}
+                key={tech.technician_id}
+                onClick={() => chooseTechnician(tech.technician_id)}
                 className="rounded-xl border-2 border-pink-200 py-6 text-xl font-semibold text-gray-900 hover:border-pink-500 hover:bg-pink-50"
               >
-                {t.display_name}
+                {tech.display_name}
               </button>
             ))}
           </div>
           <button onClick={logOut} className="mt-6 text-sm text-gray-500 underline">
-            Log out
+            {t.logOut}
           </button>
         </div>
       </main>
@@ -486,28 +537,31 @@ export default function StaffPage() {
   const othersInService = queue.filter(
     (row) => row.status === "in_service" && row.assigned_technician_id !== me.technician_id
   );
-  const freeTechnicians = technicians.filter((t) => !t.is_busy);
+  const freeTechnicians = technicians.filter((tech) => !tech.is_busy);
 
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-6">
       <div className="mx-auto w-full max-w-lg">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm text-gray-500">Logged in as</p>
+            <p className="text-sm text-gray-500">{t.loggedInAs}</p>
             <p className="text-xl font-bold text-gray-900">{me.display_name}</p>
           </div>
-          <div className="flex gap-3 text-sm">
-            <button onClick={() => chooseTechnician("")} className="text-pink-700 underline">
-              Switch technician
-            </button>
-            <button onClick={logOut} className="text-gray-500 underline">
-              Log out
-            </button>
+          <div className="flex flex-col items-end gap-2">
+            {toggle}
+            <div className="flex gap-3 text-sm">
+              <button onClick={() => chooseTechnician("")} className="text-pink-700 underline">
+                {t.switchTechnician}
+              </button>
+              <button onClick={logOut} className="text-gray-500 underline">
+                {t.logOut}
+              </button>
+            </div>
           </div>
         </div>
 
-        {error && (
-          <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
+        {errorText && (
+          <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{errorText}</p>
         )}
 
         {/* Current customer or next suggested customer */}
@@ -515,14 +569,15 @@ export default function StaffPage() {
           {myCurrent ? (
             <>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-green-700">
-                Your current customer
+                {t.currentCustomer}
               </h2>
-              <CustomerCard row={myCurrent} technicianName={technicianName} highlight>
+              <CustomerCard row={myCurrent} t={t} technicianName={technicianName} highlight>
                 {handOverEntryId === myCurrent.entry_id ? (
                   <HandOverPanel
                     row={myCurrent}
+                    t={t}
                     freeTechnicians={eligibleFor(myCurrent).filter(
-                      (t) => !t.is_busy && t.technician_id !== me.technician_id
+                      (tech) => !tech.is_busy && tech.technician_id !== me.technician_id
                     )}
                     isBusy={busyEntryId === myCurrent.entry_id}
                     onConfirm={(toId, reason, note) =>
@@ -541,13 +596,13 @@ export default function StaffPage() {
                       onClick={() => runAction(myCurrent.entry_id, "staff_finish_service")}
                       className="w-full rounded-full bg-green-600 py-5 text-2xl font-bold text-white hover:bg-green-700 disabled:opacity-60"
                     >
-                      DONE
+                      ✓ {t.doneBig}
                     </button>
                     <button
                       onClick={() => setHandOverEntryId(myCurrent.entry_id)}
                       className="w-full rounded-full border border-gray-300 py-3 text-gray-700 hover:bg-gray-100"
                     >
-                      Hand over to another technician
+                      ⇄ {t.handOverButton}
                     </button>
                   </div>
                 )}
@@ -556,9 +611,9 @@ export default function StaffPage() {
           ) : suggested ? (
             <>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-pink-700">
-                Your next customer
+                {t.nextCustomer}
               </h2>
-              <CustomerCard row={suggested} technicianName={technicianName} highlight>
+              <CustomerCard row={suggested} t={t} technicianName={technicianName} highlight>
                 <button
                   disabled={busyEntryId === suggested.entry_id}
                   onClick={() =>
@@ -568,13 +623,13 @@ export default function StaffPage() {
                   }
                   className="w-full rounded-full bg-pink-600 py-5 text-2xl font-bold text-white hover:bg-pink-700 disabled:opacity-60"
                 >
-                  START
+                  ▶ {t.startBig}
                 </button>
               </CustomerCard>
             </>
           ) : (
             <div className="rounded-2xl bg-white p-6 text-center text-gray-600 shadow-sm">
-              No customers waiting for you right now.
+              {t.noCustomersForYou}
             </div>
           )}
         </section>
@@ -582,15 +637,16 @@ export default function StaffPage() {
         {/* Everyone waiting */}
         <section className="mt-8">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
-            Waiting ({waiting.length})
+            {t.waitingCount(waiting.length)}
           </h2>
           <div className="space-y-3">
-            {waiting.length === 0 && <p className="text-sm text-gray-500">Nobody is waiting.</p>}
+            {waiting.length === 0 && <p className="text-sm text-gray-500">{t.nobodyWaiting}</p>}
             {waiting.map((row) => (
-              <CustomerCard key={row.entry_id} row={row} technicianName={technicianName}>
+              <CustomerCard key={row.entry_id} row={row} t={t} technicianName={technicianName}>
                 {changeEntryId === row.entry_id ? (
                   <ChangeRequestPanel
                     row={row}
+                    t={t}
                     eligibleTechnicians={eligibleFor(row)}
                     isBusy={busyEntryId === row.entry_id}
                     onConfirm={(newTechId) =>
@@ -612,21 +668,21 @@ export default function StaffPage() {
                         }
                         className="flex-1 rounded-full border-2 border-pink-600 py-3 font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-60"
                       >
-                        Start
+                        {t.start}
                       </button>
                     )}
                     <button
                       onClick={() => setChangeEntryId(row.entry_id)}
                       className="flex-1 rounded-full border border-gray-300 py-3 text-gray-700 hover:bg-gray-100"
                     >
-                      Change technician
+                      {t.changeTechnician}
                     </button>
                     <button
                       disabled={busyEntryId === row.entry_id}
                       onClick={() => handleNoShow(row)}
                       className="flex-1 rounded-full border border-gray-300 py-3 text-gray-600 hover:bg-gray-100 disabled:opacity-60"
                     >
-                      No-show
+                      {t.noShow}
                     </button>
                   </div>
                 )}
@@ -638,7 +694,7 @@ export default function StaffPage() {
         {/* Other technicians */}
         <section className="mt-8">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
-            Other technicians
+            {t.otherTechnicians}
           </h2>
           <div className="space-y-2">
             {othersInService.map((row) => (
@@ -650,26 +706,24 @@ export default function StaffPage() {
                   {technicianName(row.assigned_technician_id)}: #{row.ticket_number}{" "}
                   {row.first_name}
                 </span>
-                <span>{row.started_at && `${minutesSince(row.started_at)} min`}</span>
+                <span>{row.started_at && `⏱ ${minutesSince(row.started_at)}′`}</span>
               </div>
             ))}
             {freeTechnicians
-              .filter((t) => t.technician_id !== me.technician_id)
-              .map((t) => (
+              .filter((tech) => tech.technician_id !== me.technician_id)
+              .map((tech) => (
                 <div
-                  key={t.technician_id}
+                  key={tech.technician_id}
                   className="flex justify-between rounded-xl bg-white px-4 py-3 text-sm text-gray-700 shadow-sm"
                 >
-                  <span>{t.display_name}</span>
-                  <span className="font-medium text-green-700">Free</span>
+                  <span>{tech.display_name}</span>
+                  <span className="font-medium text-green-700">● {t.free}</span>
                 </div>
               ))}
           </div>
         </section>
 
-        <p className="mt-8 text-center text-xs text-gray-400">
-          Updates every {REFRESH_SECONDS} seconds
-        </p>
+        <p className="mt-8 text-center text-xs text-gray-400">{t.liveUpdates}</p>
       </div>
     </main>
   );
