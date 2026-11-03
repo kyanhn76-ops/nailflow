@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useLanguage, type Language } from "@/lib/i18n";
 import { STAFF_TEXT, translateStaffError, type StaffText } from "@/lib/staff-text";
+import { FinishPanel } from "./finish-panel";
 
 type QueueRow = {
   entry_id: string;
@@ -327,6 +328,7 @@ export default function StaffPage() {
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [handOverEntryId, setHandOverEntryId] = useState<string | null>(null);
   const [changeEntryId, setChangeEntryId] = useState<string | null>(null);
+    const [finishEntryId, setFinishEntryId] = useState<string | null>(null);
 
   // Restore a saved login after a page refresh
   useEffect(() => {
@@ -628,13 +630,25 @@ export default function StaffPage() {
                   />
                 ) : (
                   <div className="space-y-3">
-                    <button
-                      disabled={busyEntryId === myCurrent.entry_id}
-                      onClick={() => runAction(myCurrent.entry_id, "staff_finish_service")}
-                      className="w-full rounded-full bg-green-600 py-5 text-2xl font-bold text-white hover:bg-green-700 disabled:opacity-60"
-                    >
-                      ✓ {t.doneBig}
-                    </button>
+                                        {finishEntryId === myCurrent.entry_id ? (
+                      <FinishPanel
+                        sessionToken={session.token}
+                        entryId={myCurrent.entry_id}
+                        language={language}
+                        onFinished={() => {
+                          setFinishEntryId(null);
+                          loadAll(session.token);
+                        }}
+                        onCancel={() => setFinishEntryId(null)}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setFinishEntryId(myCurrent.entry_id)}
+                        className="w-full rounded-full bg-green-600 py-5 text-2xl font-bold text-white hover:bg-green-700"
+                      >
+                        ✓ {t.doneBig}
+                      </button>
+                    )}
                     <button
                       onClick={() => setHandOverEntryId(myCurrent.entry_id)}
                       className="w-full rounded-full border border-gray-300 py-3 text-gray-700 hover:bg-gray-100"

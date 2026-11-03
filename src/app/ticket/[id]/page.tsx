@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { Receipt } from "./receipt";
 
 type QueueStatus = {
   ticket_number: number;
@@ -246,6 +247,7 @@ export default function TicketPage() {
         <p className="mt-1 text-7xl font-bold text-pink-600">{ticket.ticket_number}</p>
 
         <StatusMessage ticket={ticket} />
+                {ticket.status === "done" && <Receipt entryId={entryId} />}
 
         {ticket.status === "waiting" && (
           <div className="mt-4">
