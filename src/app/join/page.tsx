@@ -1,15 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 type Service = {
   id: string;
   name: string;
-  price: number; // GBP. If priceIsFrom is true, this is the starting price
+  pricePence: number; // If priceIsFrom is true, this is the starting price
   durationMinutes: number;
   leadOnly: boolean; // true = only lead technicians can do this service
-  priceIsFrom?: boolean; // true = final price confirmed by the technician
-  group?: string; // services with the same group are shown together under one heading
+  priceIsFrom: boolean; // true = final price confirmed by the technician
+  group: string | null; // services with the same group are shown under one heading
+};
+
+type ServiceRow = {
+  id: string;
+  name: string;
+  price_pence: number;
+  duration_minutes: number;
+  lead_only: boolean;
+  price_is_from: boolean;
+  group_name: string | null;
 };
 
 type Technician = {
@@ -22,28 +33,10 @@ type DisplayItem =
   | { kind: "service"; service: Service }
   | { kind: "group"; name: string; services: Service[] };
 
-// ===== EDIT YOUR SALON'S SERVICES HERE =====
-const SERVICES: Service[] = [
-  { id: "gel-hands", name: "Gel polish (hands)", price: 25, durationMinutes: 35, leadOnly: false },
-  { id: "gel-toes", name: "Gel toes", price: 25, durationMinutes: 35, leadOnly: false },
-  { id: "manicure", name: "Manicure", price: 20, durationMinutes: 30, leadOnly: false },
-  { id: "pedicure", name: "Pedicure", price: 30, durationMinutes: 40, leadOnly: false },
-  { id: "pedicure-deluxe", name: "Deluxe pedicure", price: 45, durationMinutes: 60, leadOnly: false },
-  { id: "biab-overlay", name: "BIAB overlay", price: 35, durationMinutes: 50, leadOnly: true },
-  { id: "biab-infill", name: "BIAB infill", price: 32, durationMinutes: 45, leadOnly: true },
-  { id: "biab-extensions", name: "BIAB extensions", price: 45, durationMinutes: 75, leadOnly: true },
-  { id: "acrylic-full", name: "Acrylic full set", price: 35, durationMinutes: 60, leadOnly: true },
-  { id: "acrylic-infill", name: "Acrylic infill", price: 28, durationMinutes: 45, leadOnly: true },
-  { id: "nail-art-simple", name: "Nail art – Simple", price: 5, durationMinutes: 15, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "nail-art-medium", name: "Nail art – Medium", price: 10, durationMinutes: 25, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "nail-art-complex", name: "Nail art – Complex", price: 20, durationMinutes: 40, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "gems-few", name: "Gems – A few (1–2 nails)", price: 3, durationMinutes: 10, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "gems-medium", name: "Gems – Medium (3–5 nails)", price: 8, durationMinutes: 20, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "gems-lots", name: "Gems – Lots (6–10 nails)", price: 15, durationMinutes: 30, leadOnly: true, priceIsFrom: true, group: "Nail art" },
-  { id: "removal", name: "Removal", price: 10, durationMinutes: 15, leadOnly: false },
-];
+// Which salon this page belongs to. Later each salon gets its own QR link.
+const SALON_SLUG = "demo-salon";
 
-// ===== EDIT YOUR TECHNICIANS HERE =====
+// ===== TECHNICIANS (will move to the database in a later step) =====
 const TECHNICIANS: Technician[] = [
   { id: "linh", name: "Linh", level: "lead" },
   { id: "mai", name: "Mai", level: "lead" },
@@ -52,17 +45,31 @@ const TECHNICIANS: Technician[] = [
 
 const ANY_TECHNICIAN = "any";
 
-function formatPrice(amount: number) {
-  return `£${amount.toFixed(2)}`;
+function formatPrice(pence: number) {
+  return `£${(pence / 100).toFixed(2)}`;
 }
 
 function displayServicePrice(service: Service) {
-  return service.priceIsFrom ? `from ${formatPrice(service.price)}` : formatPrice(service.price);
+  return service.priceIsFrom
+    ? `from ${formatPrice(service.pricePence)}`
+    : formatPrice(service.pricePence);
 }
 
 function isValidUkMobile(value: string) {
   const digits = value.replace(/\s/g, "");
   return /^(07\d{9}|\+447\d{9})$/.test(digits);
+}
+
+function mapServiceRow(row: ServiceRow): Service {
+  return {
+    id: row.id,
+    name: row.name,
+    pricePence: row.price_pence,
+    durationMinutes: row.duration_minutes,
+    leadOnly: row.lead_only,
+    priceIsFrom: row.price_is_from,
+    group: row.group_name,
+  };
 }
 
 // Turns the flat service list into single services and grouped services, keeping the order
@@ -84,8 +91,6 @@ function buildDisplayItems(services: Service[]): DisplayItem[] {
   }
   return items;
 }
-
-const DISPLAY_ITEMS = buildDisplayItems(SERVICES);
 
 function ServiceOption({
   service,
@@ -121,6 +126,11 @@ function ServiceOption({
 }
 
 export default function JoinQueuePage() {
+  const [salonName, setSalonName] = useState("");
+  const [services, setServices] = useState<Service[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
   const [firstName, setFirstName] = useState("");
   const [phone, setPhone] = useState("");
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
@@ -130,17 +140,60 @@ export default function JoinQueuePage() {
   const [error, setError] = useState("");
   const [ticketNumber, setTicketNumber] = useState<number | null>(null);
 
-  const selectedServices = SERVICES.filter((s) => selectedServiceIds.includes(s.id));
+  // Load the salon and its services from Supabase when the page opens
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadServices() {
+      const { data: salon, error: salonError } = await supabase
+        .from("salons")
+        .select("id, name")
+        .eq("slug", SALON_SLUG)
+        .single();
+
+      if (cancelled) return;
+      if (salonError || !salon) {
+        setLoadError("We could not find this salon. Please ask a member of staff.");
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: rows, error: servicesError } = await supabase
+        .from("services")
+        .select("id, name, price_pence, duration_minutes, lead_only, price_is_from, group_name")
+        .eq("salon_id", salon.id)
+        .order("sort_order", { ascending: true });
+
+      if (cancelled) return;
+      if (servicesError || !rows) {
+        setLoadError("We could not load the services. Please try again in a moment.");
+        setIsLoading(false);
+        return;
+      }
+
+      setSalonName(salon.name);
+      setServices((rows as ServiceRow[]).map(mapServiceRow));
+      setIsLoading(false);
+    }
+
+    loadServices();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const displayItems = buildDisplayItems(services);
+  const selectedServices = services.filter((s) => selectedServiceIds.includes(s.id));
   const needsLead = selectedServices.some((s) => s.leadOnly);
   const eligibleTechnicians = TECHNICIANS.filter(
     (t) => !needsLead || t.level === "lead"
   );
-  const totalPrice = selectedServices.reduce((sum, s) => sum + s.price, 0);
+  const totalPence = selectedServices.reduce((sum, s) => sum + s.pricePence, 0);
   const totalMinutes = selectedServices.reduce((sum, s) => sum + s.durationMinutes, 0);
   const hasFromPrice = selectedServices.some((s) => s.priceIsFrom);
   const totalPriceLabel = hasFromPrice
-    ? `from ${formatPrice(totalPrice)}`
-    : formatPrice(totalPrice);
+    ? `from ${formatPrice(totalPence)}`
+    : formatPrice(totalPence);
 
   // If the chosen technician can no longer do the selected services, fall back to "any"
   const chosenTechnician = eligibleTechnicians.find((t) => t.id === technicianId);
@@ -179,11 +232,30 @@ export default function JoinQueuePage() {
     setTicketNumber(Math.floor(Math.random() * 50) + 1);
   }
 
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6">
+        <p className="text-gray-600">Loading services...</p>
+      </main>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6">
+        <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-md">
+          <p className="text-red-700">{loadError}</p>
+        </div>
+      </main>
+    );
+  }
+
   if (ticketNumber !== null) {
     return (
       <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6 py-10">
         <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-md">
-          <p className="text-lg text-gray-700">Thanks, {firstName}!</p>
+          <p className="text-sm text-gray-500">{salonName}</p>
+          <p className="mt-1 text-lg text-gray-700">Thanks, {firstName}!</p>
           <p className="mt-6 text-sm uppercase tracking-wide text-gray-400">Your number</p>
           <p className="mt-1 text-7xl font-bold text-pink-600">{ticketNumber}</p>
 
@@ -227,7 +299,8 @@ export default function JoinQueuePage() {
         onSubmit={handleSubmit}
         className="w-full max-w-md rounded-2xl bg-white p-8 shadow-md"
       >
-        <h1 className="text-2xl font-bold text-pink-600">Join the queue</h1>
+        <p className="text-sm text-gray-500">{salonName}</p>
+        <h1 className="mt-1 text-2xl font-bold text-pink-600">Join the queue</h1>
         <p className="mt-1 text-gray-600">Tell us your name and what you would like.</p>
 
         <label className="mt-6 block text-sm font-medium text-gray-700">First name</label>
@@ -241,7 +314,7 @@ export default function JoinQueuePage() {
 
         <p className="mt-6 text-sm font-medium text-gray-700">Services (choose one or more)</p>
         <div className="mt-2 space-y-2">
-          {DISPLAY_ITEMS.map((item) => {
+          {displayItems.map((item) => {
             if (item.kind === "service") {
               return (
                 <ServiceOption
@@ -257,7 +330,7 @@ export default function JoinQueuePage() {
             const selectedInGroup = item.services.filter((s) =>
               selectedServiceIds.includes(s.id)
             ).length;
-            const lowestPrice = Math.min(...item.services.map((s) => s.price));
+            const lowestPence = Math.min(...item.services.map((s) => s.pricePence));
 
             return (
               <div
@@ -279,7 +352,7 @@ export default function JoinQueuePage() {
                     </span>
                   </span>
                   <span className="flex items-center gap-3 text-sm text-gray-600">
-                    from {formatPrice(lowestPrice)}
+                    from {formatPrice(lowestPence)}
                     <span className="text-lg text-pink-600">{isOpen ? "▴" : "▾"}</span>
                   </span>
                 </button>
