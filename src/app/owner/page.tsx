@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { useLanguage } from "@/lib/i18n";
 import { OWNER_TEXT } from "@/lib/owner-text";
 import { LanguageToggle } from "@/components/language-toggle";
+import { TechniciansSection } from "./technicians-section";
+import { TodaySection } from "./today-section";
 
 type MySalon = {
   salon_id: string;
@@ -16,11 +18,11 @@ type MySalon = {
 
 type SectionKey = "today" | "technicians" | "services" | "reports";
 
-const SECTIONS: { key: SectionKey; icon: string }[] = [
-  { key: "today", icon: "📋" },
-  { key: "technicians", icon: "👩‍🔧" },
-  { key: "services", icon: "💅" },
-  { key: "reports", icon: "📈" },
+const SECTIONS: { key: SectionKey; icon: string; ready: boolean }[] = [
+  { key: "today", icon: "📋", ready: true },
+  { key: "technicians", icon: "👩‍🔧", ready: true },
+  { key: "services", icon: "💅", ready: false },
+  { key: "reports", icon: "📈", ready: false },
 ];
 
 const SELECTED_SALON_KEY = "nailflow-owner-salon";
@@ -57,6 +59,7 @@ export default function OwnerPage() {
   const [isLoadingSalons, setIsLoadingSalons] = useState(false);
   const [salonsError, setSalonsError] = useState(false);
   const [selectedSalonId, setSelectedSalonId] = useState("");
+  const [openSection, setOpenSection] = useState<SectionKey | null>(null);
 
   // Check if the owner is already signed in, and listen for sign in / sign out
   useEffect(() => {
@@ -126,6 +129,7 @@ export default function OwnerPage() {
     await supabase.auth.signOut();
     setSalons([]);
     setSelectedSalonId("");
+    setOpenSection(null);
   }
 
   function chooseSalon(id: string) {
@@ -233,7 +237,45 @@ export default function OwnerPage() {
 
   const salon = salons.find((s) => s.salon_id === selectedSalonId) ?? salons[0];
 
-  // Screen 3: owner home
+  // Screen 3: an open section
+  if (openSection === "technicians" || openSection === "today") {
+    const icon = openSection === "today" ? "📋" : "👩‍🔧";
+    return (
+      <main className="min-h-screen bg-gray-50 px-4 py-6">
+        <div className="mx-auto max-w-2xl">
+          {header}
+          <button
+            onClick={() => setOpenSection(null)}
+            className="mt-6 text-sm font-medium text-pink-700 underline"
+          >
+            {t.back}
+          </button>
+          <h1 className="mt-2 text-2xl font-bold text-gray-900">
+            {icon} {t.sections[openSection].title} · {salon.salon_name}
+          </h1>
+          <div className="mt-4">
+            {openSection === "today" ? (
+              <TodaySection
+                key={salon.salon_id}
+                salonId={salon.salon_id}
+                salonSlug={salon.salon_slug}
+                language={language}
+              />
+            ) : (
+              <TechniciansSection
+                key={salon.salon_id}
+                salonId={salon.salon_id}
+                role={salon.role}
+                t={t}
+              />
+            )}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // Screen 4: owner home
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-6">
       <div className="mx-auto max-w-2xl">
@@ -264,23 +306,45 @@ export default function OwnerPage() {
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {SECTIONS.map((section) => (
-            <div
-              key={section.key}
-              className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-3xl">{section.icon}</p>
-                <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500">
-                  {t.comingSoon}
-                </span>
+          {SECTIONS.map((section) => {
+            const content = (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-3xl">{section.icon}</p>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      section.ready ? "bg-pink-600 text-white" : "bg-gray-100 text-gray-500"
+                    }`}
+                  >
+                    {section.ready ? t.open : t.comingSoon}
+                  </span>
+                </div>
+                <p className="mt-3 text-lg font-semibold text-gray-900">
+                  {t.sections[section.key].title}
+                </p>
+                <p className="mt-1 text-sm text-gray-600">
+                  {t.sections[section.key].description}
+                </p>
+              </>
+            );
+
+            return section.ready ? (
+              <button
+                key={section.key}
+                onClick={() => setOpenSection(section.key)}
+                className="rounded-2xl border border-pink-200 bg-white p-5 text-left shadow-sm hover:border-pink-500"
+              >
+                {content}
+              </button>
+            ) : (
+              <div
+                key={section.key}
+                className="rounded-2xl border border-gray-200 bg-white p-5 opacity-70 shadow-sm"
+              >
+                {content}
               </div>
-              <p className="mt-3 text-lg font-semibold text-gray-900">
-                {t.sections[section.key].title}
-              </p>
-              <p className="mt-1 text-sm text-gray-600">{t.sections[section.key].description}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </main>
