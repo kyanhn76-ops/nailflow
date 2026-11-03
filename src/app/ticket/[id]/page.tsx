@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
@@ -11,10 +11,18 @@ type QueueStatus = {
   people_ahead: number;
   estimated_wait_minutes: number;
   salon_name: string;
+  requested_technician_id: string | null;
+  requested_technician_name: string | null;
+};
+
+type TechnicianOption = {
+  technician_id: string;
+  display_name: string;
 };
 
 const REFRESH_SECONDS = 15;
 const NEARLY_YOUR_TURN_MINUTES = 5;
+const ANY_TECHNICIAN = "any";
 
 function StatusMessage({ ticket }: { ticket: QueueStatus }) {
   if (ticket.status === "in_service") {
@@ -43,7 +51,6 @@ function StatusMessage({ ticket }: { ticket: QueueStatus }) {
     );
   }
 
-  // A technician is free for this customer right now
   if (ticket.estimated_wait_minutes === 0) {
     return (
       <div className="mt-6 rounded-xl bg-green-100 p-4 text-green-800">
@@ -77,6 +84,100 @@ function StatusMessage({ ticket }: { ticket: QueueStatus }) {
   );
 }
 
+function ChangeTechnician({
+  entryId,
+  currentTechnicianId,
+  onChanged,
+}: {
+  entryId: string;
+  currentTechnicianId: string | null;
+  onChanged: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [options, setOptions] = useState<TechnicianOption[]>([]);
+  const [selected, setSelected] = useState(ANY_TECHNICIAN);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function openPicker() {
+    setError("");
+    setSelected(currentTechnicianId ?? ANY_TECHNICIAN);
+    setIsOpen(true);
+
+    const { data, error: loadError } = await supabase.rpc("get_ticket_technicians", {
+      p_entry_id: entryId,
+    });
+    if (loadError) {
+      setError("Could not load technicians. Please try again.");
+      return;
+    }
+    setOptions((data ?? []) as TechnicianOption[]);
+  }
+
+  async function save() {
+    setIsSaving(true);
+    setError("");
+
+    const { error: saveError } = await supabase.rpc("customer_change_technician", {
+      p_entry_id: entryId,
+      p_technician_id: selected === ANY_TECHNICIAN ? null : selected,
+    });
+
+    setIsSaving(false);
+    if (saveError) {
+      setError(saveError.message);
+      return;
+    }
+    setIsOpen(false);
+    onChanged();
+  }
+
+  if (!isOpen) {
+    return (
+      <button onClick={openPicker} className="mt-2 text-sm font-medium text-pink-700 underline">
+        Change technician
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 p-4 text-left">
+      <label className="block text-sm font-medium text-gray-700">Choose a technician</label>
+      <select
+        value={selected}
+        onChange={(e) => setSelected(e.target.value)}
+        className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
+      >
+        <option value={ANY_TECHNICIAN}>First available (shortest wait)</option>
+        {options.map((t) => (
+          <option key={t.technician_id} value={t.technician_id}>
+            {t.display_name}
+          </option>
+        ))}
+      </select>
+      <p className="mt-2 text-xs text-gray-500">You keep your place in the queue.</p>
+
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+
+      <div className="mt-4 flex gap-3">
+        <button
+          onClick={save}
+          disabled={isSaving}
+          className="flex-1 rounded-full bg-pink-600 py-3 font-semibold text-white hover:bg-pink-700 disabled:opacity-60"
+        >
+          {isSaving ? "Saving..." : "Save"}
+        </button>
+        <button
+          onClick={() => setIsOpen(false)}
+          className="flex-1 rounded-full border border-gray-300 py-3 text-gray-700 hover:bg-gray-100"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function TicketPage() {
   const params = useParams<{ id: string }>();
   const entryId = params.id;
@@ -85,44 +186,36 @@ export default function TicketPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const hasLoadedRef = useRef(false);
+
+  const loadTicket = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_queue_status", {
+      p_entry_id: entryId,
+    });
+
+    if (error || !data || data.length === 0) {
+      // Only show "not found" if we never loaded the ticket.
+      // A short network problem later should not hide a valid ticket.
+      if (!hasLoadedRef.current) {
+        setNotFound(true);
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    hasLoadedRef.current = true;
+    setTicket((data as QueueStatus[])[0]);
+    setNotFound(false);
+    setLastUpdated(new Date());
+    setIsLoading(false);
+  }, [entryId]);
 
   // Load the ticket now, then refresh it every few seconds
   useEffect(() => {
-    let cancelled = false;
-    let hasLoaded = false;
-
-    async function loadTicket() {
-      const { data, error } = await supabase.rpc("get_queue_status", {
-        p_entry_id: entryId,
-      });
-
-      if (cancelled) return;
-
-      if (error || !data || data.length === 0) {
-        // Only show "not found" if we never loaded the ticket.
-        // A short network problem later should not hide a valid ticket.
-        if (!hasLoaded) {
-          setNotFound(true);
-          setIsLoading(false);
-        }
-        return;
-      }
-
-      hasLoaded = true;
-      setTicket((data as QueueStatus[])[0]);
-      setNotFound(false);
-      setLastUpdated(new Date());
-      setIsLoading(false);
-    }
-
     loadTicket();
     const timer = setInterval(loadTicket, REFRESH_SECONDS * 1000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [entryId]);
+    return () => clearInterval(timer);
+  }, [loadTicket]);
 
   if (isLoading) {
     return (
@@ -153,6 +246,22 @@ export default function TicketPage() {
         <p className="mt-1 text-7xl font-bold text-pink-600">{ticket.ticket_number}</p>
 
         <StatusMessage ticket={ticket} />
+
+        {ticket.status === "waiting" && (
+          <div className="mt-4">
+            <p className="text-sm text-gray-600">
+              Technician:{" "}
+              <span className="font-medium text-gray-900">
+                {ticket.requested_technician_name ?? "First available"}
+              </span>
+            </p>
+            <ChangeTechnician
+              entryId={entryId}
+              currentTechnicianId={ticket.requested_technician_id}
+              onChanged={loadTicket}
+            />
+          </div>
+        )}
 
         <p className="mt-6 text-xs text-gray-400">
           Keep this page open. It updates automatically

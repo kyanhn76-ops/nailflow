@@ -9,7 +9,7 @@ type Service = {
   name: string;
   pricePence: number; // If priceIsFrom is true, this is the starting price
   durationMinutes: number;
-  leadOnly: boolean; // true = only lead technicians can do this service
+  leadOnly: boolean;
   priceIsFrom: boolean; // true = final price confirmed by the technician
   group: string | null; // services with the same group are shown under one heading
 };
@@ -24,10 +24,9 @@ type ServiceRow = {
   group_name: string | null;
 };
 
-type Technician = {
-  id: string;
-  name: string;
-  level: "lead" | "assistant"; // never shown to customers
+type TechnicianOption = {
+  technician_id: string;
+  display_name: string;
 };
 
 type DisplayItem =
@@ -36,14 +35,6 @@ type DisplayItem =
 
 // Which salon this page belongs to. Later each salon gets its own QR link.
 const SALON_SLUG = "demo-salon";
-
-// ===== TECHNICIANS (will move to the database in a later step) =====
-const TECHNICIANS: Technician[] = [
-  { id: "linh", name: "Linh", level: "lead" },
-  { id: "mai", name: "Mai", level: "lead" },
-  { id: "tom", name: "Tom", level: "assistant" },
-];
-
 const ANY_TECHNICIAN = "any";
 
 function formatPrice(pence: number) {
@@ -131,6 +122,7 @@ export default function JoinQueuePage() {
 
   const [salonName, setSalonName] = useState("");
   const [services, setServices] = useState<Service[]>([]);
+  const [technicians, setTechnicians] = useState<TechnicianOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -143,7 +135,7 @@ export default function JoinQueuePage() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Load the salon and its services from Supabase when the page opens
+  // Load the salon and its services when the page opens
   useEffect(() => {
     let cancelled = false;
 
@@ -185,12 +177,29 @@ export default function JoinQueuePage() {
     };
   }, []);
 
+  // Reload the technicians who can do the chosen services whenever the choice changes
+  const selectedKey = selectedServiceIds.join(",");
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTechnicians() {
+      const ids = selectedKey ? selectedKey.split(",") : [];
+      const { data, error: techError } = await supabase.rpc("get_salon_technicians", {
+        p_salon_slug: SALON_SLUG,
+        p_service_ids: ids,
+      });
+      if (cancelled || techError) return;
+      setTechnicians((data ?? []) as TechnicianOption[]);
+    }
+
+    loadTechnicians();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedKey]);
+
   const displayItems = buildDisplayItems(services);
   const selectedServices = services.filter((s) => selectedServiceIds.includes(s.id));
-  const needsLead = selectedServices.some((s) => s.leadOnly);
-  const eligibleTechnicians = TECHNICIANS.filter(
-    (t) => !needsLead || t.level === "lead"
-  );
   const totalPence = selectedServices.reduce((sum, s) => sum + s.pricePence, 0);
   const totalMinutes = selectedServices.reduce((sum, s) => sum + s.durationMinutes, 0);
   const hasFromPrice = selectedServices.some((s) => s.priceIsFrom);
@@ -199,7 +208,7 @@ export default function JoinQueuePage() {
     : formatPrice(totalPence);
 
   // If the chosen technician can no longer do the selected services, fall back to "any"
-  const chosenTechnician = eligibleTechnicians.find((t) => t.id === technicianId);
+  const chosenTechnician = technicians.find((t) => t.technician_id === technicianId);
   const effectiveTechnicianId = chosenTechnician ? technicianId : ANY_TECHNICIAN;
 
   function toggleService(id: string) {
@@ -375,9 +384,9 @@ export default function JoinQueuePage() {
           className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
         >
           <option value={ANY_TECHNICIAN}>First available (shortest wait)</option>
-          {eligibleTechnicians.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
+          {technicians.map((t) => (
+            <option key={t.technician_id} value={t.technician_id}>
+              {t.display_name}
             </option>
           ))}
         </select>
