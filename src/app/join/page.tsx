@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Service = {
@@ -126,6 +127,8 @@ function ServiceOption({
 }
 
 export default function JoinQueuePage() {
+  const router = useRouter();
+
   const [salonName, setSalonName] = useState("");
   const [services, setServices] = useState<Service[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -138,7 +141,7 @@ export default function JoinQueuePage() {
   const [technicianId, setTechnicianId] = useState(ANY_TECHNICIAN);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
-  const [ticketNumber, setTicketNumber] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Load the salon and its services from Supabase when the page opens
   useEffect(() => {
@@ -211,8 +214,9 @@ export default function JoinQueuePage() {
     );
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isSubmitting) return;
     setError("");
 
     if (!firstName.trim()) {
@@ -228,8 +232,26 @@ export default function JoinQueuePage() {
       return;
     }
 
-    // Temporary number for testing the screen. Real queue numbers come later.
-    setTicketNumber(Math.floor(Math.random() * 50) + 1);
+    setIsSubmitting(true);
+
+    const { data, error: joinError } = await supabase.rpc("join_queue", {
+      p_salon_slug: SALON_SLUG,
+      p_first_name: firstName.trim(),
+      p_service_ids: selectedServices.map((s) => s.id),
+      p_phone: phone.trim() || null,
+      p_notes: notes.trim() || null,
+      p_requested_technician_id:
+        effectiveTechnicianId === ANY_TECHNICIAN ? null : effectiveTechnicianId,
+    });
+
+    if (joinError || !data || data.length === 0) {
+      setError("Sorry, we could not add you to the queue. Please try again.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const entryId = (data as { entry_id: string; ticket_number: number }[])[0].entry_id;
+    router.push(`/ticket/${entryId}`);
   }
 
   if (isLoading) {
@@ -245,49 +267,6 @@ export default function JoinQueuePage() {
       <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6">
         <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-md">
           <p className="text-red-700">{loadError}</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (ticketNumber !== null) {
-    return (
-      <main className="min-h-screen bg-pink-50 flex items-center justify-center px-6 py-10">
-        <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-md">
-          <p className="text-sm text-gray-500">{salonName}</p>
-          <p className="mt-1 text-lg text-gray-700">Thanks, {firstName}!</p>
-          <p className="mt-6 text-sm uppercase tracking-wide text-gray-400">Your number</p>
-          <p className="mt-1 text-7xl font-bold text-pink-600">{ticketNumber}</p>
-
-          <div className="mt-6 rounded-xl bg-pink-50 p-4 text-left">
-            {selectedServices.map((s) => (
-              <div key={s.id} className="flex justify-between py-1 text-gray-800">
-                <span>{s.name}</span>
-                <span>{displayServicePrice(s)}</span>
-              </div>
-            ))}
-            <div className="mt-2 flex justify-between border-t border-pink-200 pt-2 font-semibold text-gray-900">
-              <span>Total</span>
-              <span>{totalPriceLabel}</span>
-            </div>
-            {hasFromPrice && (
-              <p className="mt-1 text-xs text-gray-500">
-                Final price will be confirmed by your technician.
-              </p>
-            )}
-            <p className="mt-2 text-sm text-gray-600">About {totalMinutes} minutes</p>
-            <p className="mt-1 text-sm text-gray-600">
-              Technician:{" "}
-              {chosenTechnician ? chosenTechnician.name : "First available"}
-            </p>
-            {notes && <p className="mt-1 text-sm text-gray-600">Note: {notes}</p>}
-          </div>
-
-          <p className="mt-6 text-gray-600">
-            {phone.trim()
-              ? "We will text you when it is nearly your turn."
-              : "Keep this page open. We will show you when it is your turn."}
-          </p>
         </div>
       </main>
     );
@@ -309,6 +288,7 @@ export default function JoinQueuePage() {
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
           placeholder="e.g. Sarah"
+          maxLength={50}
           className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
         />
 
@@ -422,6 +402,7 @@ export default function JoinQueuePage() {
           onChange={(e) => setNotes(e.target.value)}
           placeholder="e.g. sensitive nails, flowers on 2 nails"
           rows={3}
+          maxLength={300}
           className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 text-gray-900 focus:border-pink-500 focus:outline-none"
         />
 
@@ -431,9 +412,10 @@ export default function JoinQueuePage() {
 
         <button
           type="submit"
-          className="mt-6 w-full rounded-full bg-pink-600 py-4 text-lg font-semibold text-white hover:bg-pink-700"
+          disabled={isSubmitting}
+          className="mt-6 w-full rounded-full bg-pink-600 py-4 text-lg font-semibold text-white hover:bg-pink-700 disabled:opacity-60"
         >
-          Get my number
+          {isSubmitting ? "Getting your number..." : "Get my number"}
         </button>
       </form>
     </main>
